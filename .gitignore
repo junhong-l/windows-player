@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.eggs/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 运行时生成的配置文件
+global_settings.json
+default_player.json
+settings/
+
+# mpv 动态库（太大，用户自行下载）
+libmpv-2.dll
+libmpv*.dll
+mpv-*.7z
+mpv-latest.7z
+
+# 临时文件
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# 虚拟环境
+venv/
+env/
+.env/
+
+# 下载的压缩包
+*.7z
+*.zip
