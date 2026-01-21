@@ -90,7 +90,18 @@ class GlobalSettingsManager:
     
     def __init__(self):
         self._settings: GlobalSettings | None = None
-        self._settings_path = os.path.join(APP_DIR, self.SETTINGS_FILE)
+        # 保存在 settings 目录中
+        ensure_settings_dir()
+        self._settings_path = os.path.join(SETTINGS_DIR, self.SETTINGS_FILE)
+        
+        # 兼容旧版本：如果旧位置有配置文件，迁移到新位置
+        old_path = os.path.join(APP_DIR, self.SETTINGS_FILE)
+        if os.path.exists(old_path) and not os.path.exists(self._settings_path):
+            try:
+                import shutil
+                shutil.move(old_path, self._settings_path)
+            except:
+                pass
     
     def load(self) -> GlobalSettings:
         """加载全局设置"""

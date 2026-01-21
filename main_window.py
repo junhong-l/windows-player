@@ -61,7 +61,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("全局设置")
-        self.setFixedSize(360, 260)
+        self.setFixedSize(360, 320)
         
         # 设置窗口图标
         icon_path = os.path.join(os.path.dirname(__file__), 'icon.ico')
@@ -110,10 +110,10 @@ class SettingsDialog(QDialog):
                 font-weight: bold; 
             }
             QPushButton:hover { background: #00b5e5; }
-            QPushButton#clearBtn {
+            QPushButton#clearBtn, QPushButton#fixIconBtn {
                 background: #444;
             }
-            QPushButton#clearBtn:hover { background: #666; }
+            QPushButton#clearBtn:hover, QPushButton#fixIconBtn:hover { background: #666; }
             """
         )
         self._build()
@@ -158,6 +158,18 @@ class SettingsDialog(QDialog):
         cache_row.addWidget(self.clear_cache_btn, 1)
         layout.addLayout(cache_row)
 
+        # 修复文件关联图标
+        icon_row = QHBoxLayout()
+        icon_label = QLabel("文件关联")
+        icon_label.setFixedWidth(80)
+        self.fix_icon_btn = QPushButton("修复文件图标")
+        self.fix_icon_btn.setObjectName("fixIconBtn")
+        self.fix_icon_btn.setToolTip("重新注册文件关联，修复视频文件不显示播放器图标的问题")
+        self.fix_icon_btn.clicked.connect(self._fix_file_icons)
+        icon_row.addWidget(icon_label)
+        icon_row.addWidget(self.fix_icon_btn, 1)
+        layout.addLayout(icon_row)
+
         layout.addStretch()
 
         btn_row = QHBoxLayout()
@@ -166,6 +178,30 @@ class SettingsDialog(QDialog):
         ok_btn.clicked.connect(self.accept)
         btn_row.addWidget(ok_btn)
         layout.addLayout(btn_row)
+    
+    def _fix_file_icons(self):
+        """修复文件关联图标"""
+        if sys.platform != 'win32':
+            QMessageBox.information(self, "提示", "此功能仅支持 Windows 系统")
+            return
+        
+        try:
+            from default_player import default_player_manager
+            
+            # 重新注册文件类型
+            if default_player_manager.register_file_types():
+                QMessageBox.information(
+                    self, "修复完成",
+                    "文件关联已重新注册！\n\n"
+                    "如果图标仍未显示，请尝试：\n"
+                    "1. 注销并重新登录 Windows\n"
+                    "2. 或者重启电脑\n\n"
+                    "注意：只有打包后的 exe 才能正确显示图标"
+                )
+            else:
+                QMessageBox.warning(self, "修复失败", "注册文件关联时出错，请以管理员身份运行程序后重试")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"修复失败：{e}")
     
     def _clear_cache(self):
         """清理所有文件夹设置缓存"""
@@ -734,6 +770,10 @@ class MainWindow(QMainWindow):
         self.audio_btn = self._mk_text_btn("音轨", "选择音轨")
         self.audio_btn.clicked.connect(self._show_audio_menu)
         btn_row.addWidget(self.audio_btn)
+        
+        self.subtitle_btn = self._mk_text_btn("字幕", "选择字幕")
+        self.subtitle_btn.clicked.connect(self._show_subtitle_menu)
+        btn_row.addWidget(self.subtitle_btn)
 
         self.settings_btn = self._mk_icon_btn("fa5s.cog", "设置")
         self.settings_btn.clicked.connect(self._show_settings)
@@ -1234,6 +1274,124 @@ class MainWindow(QMainWindow):
                     lang = track['lang'] or ""
                     self.audio_btn.setText(f"音轨 {lang}" if lang else "音轨")
                     break
+
+    def _show_subtitle_menu(self):
+        """显示字幕选择菜单"""
+        if not self.player:
+            return
+        
+        tracks = self.player.get_subtitle_tracks()
+        
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background: #222;
+                color: #fff;
+                border: 1px solid #444;
+                padding: 5px;
+            }
+            QMenu::item {
+                padding: 8px 20px;
+            }
+            QMenu::item:selected {
+                background: #00a1d6;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #444;
+                margin: 5px 0;
+            }
+        """)
+        
+        current_sid = self.player.current_subtitle_track
+        
+        # 添加"关闭字幕"选项
+        label = f"{'✓ ' if current_sid == 0 else '   '}关闭字幕"
+        action = menu.addAction(label)
+        action.setData(0)
+        
+        if tracks:
+            menu.addSeparator()
+            
+            for track in tracks:
+                tid = track['id']
+                title = track['title'] or f"字幕 {tid}"
+                lang = track['lang']
+                external = track['external']
+                
+                # 构建显示标签
+                parts = [title]
+                if lang:
+                    parts.append(f"[{lang}]")
+                if external:
+                    parts.append("(外挂)")
+                
+                label = f"{'✓ ' if tid == current_sid else '   '}{' '.join(parts)}"
+                action = menu.addAction(label)
+                action.setData(tid)
+        
+        menu.addSeparator()
+        
+        # 添加"加载外部字幕"选项
+        load_action = menu.addAction("   📁 加载外部字幕...")
+        load_action.setData(-1)
+        
+        # 添加字幕延迟设置
+        delay_action = menu.addAction(f"   ⏱ 字幕延迟 ({self.player.subtitle_delay:+.1f}s)")
+        delay_action.setData(-2)
+        
+        action = menu.exec(self.subtitle_btn.mapToGlobal(self.subtitle_btn.rect().topLeft()))
+        if action and self.player:
+            data = action.data()
+            if data == -1:
+                # 加载外部字幕
+                self._load_external_subtitle()
+            elif data == -2:
+                # 设置字幕延迟
+                self._set_subtitle_delay()
+            else:
+                # 选择字幕轨道
+                self.player.set_subtitle_track(data)
+                # 更新按钮显示
+                if data == 0:
+                    self.subtitle_btn.setText("字幕")
+                else:
+                    for track in tracks:
+                        if track['id'] == data:
+                            lang = track['lang'] or ""
+                            self.subtitle_btn.setText(f"字幕 {lang}" if lang else "字幕")
+                            break
+    
+    def _load_external_subtitle(self):
+        """加载外部字幕文件"""
+        if not self.player:
+            return
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择字幕文件",
+            os.path.dirname(self._current_file) if self._current_file else "",
+            "字幕文件 (*.srt *.ass *.ssa *.sub *.vtt *.idx);;所有文件 (*.*)"
+        )
+        if file_path:
+            self.player.load_external_subtitle(file_path)
+            self._show_toast(f"已加载字幕: {os.path.basename(file_path)}")
+    
+    def _set_subtitle_delay(self):
+        """设置字幕延迟"""
+        if not self.player:
+            return
+        
+        from PyQt6.QtWidgets import QInputDialog
+        current_delay = self.player.subtitle_delay
+        value, ok = QInputDialog.getDouble(
+            self, "字幕延迟",
+            "设置字幕延迟（秒）：\n正值表示字幕延后显示，负值表示字幕提前显示",
+            current_delay, -30.0, 30.0, 1
+        )
+        if ok:
+            self.player.subtitle_delay = value
+            self._show_toast(f"字幕延迟: {value:+.1f}s")
 
     def _show_settings(self):
         """显示全局设置对话框"""

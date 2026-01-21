@@ -237,6 +237,88 @@ class PlayerCore:
         except:
             return 1
 
+    # ========== 字幕控制 ==========
+
+    def get_subtitle_tracks(self) -> list:
+        """获取字幕轨道列表
+        返回: [{"id": int, "title": str, "lang": str, "selected": bool, "external": bool}, ...]
+        """
+        tracks = []
+        try:
+            track_list = self.player.track_list
+            for track in track_list:
+                if track.get('type') == 'sub':
+                    tracks.append({
+                        'id': track.get('id', 0),
+                        'title': track.get('title', ''),
+                        'lang': track.get('lang', ''),
+                        'selected': track.get('selected', False),
+                        'external': track.get('external', False)
+                    })
+        except:
+            pass
+        return tracks
+    
+    def set_subtitle_track(self, track_id: int):
+        """设置当前字幕轨道（0表示关闭字幕）"""
+        try:
+            if track_id == 0:
+                self.player.sid = 'no'
+            else:
+                self.player.sid = track_id
+        except:
+            pass
+    
+    @property
+    def current_subtitle_track(self) -> int:
+        """获取当前字幕轨道ID（0表示无字幕）"""
+        try:
+            sid = self.player.sid
+            if sid == 'no' or sid is False or sid is None:
+                return 0
+            return int(sid) if sid else 0
+        except:
+            return 0
+    
+    def load_external_subtitle(self, subtitle_path: str):
+        """加载外部字幕文件"""
+        try:
+            self.player.sub_add(subtitle_path)
+        except:
+            pass
+    
+    @property
+    def subtitle_delay(self) -> float:
+        """获取字幕延迟（秒）"""
+        try:
+            return self.player.sub_delay or 0
+        except:
+            return 0
+    
+    @subtitle_delay.setter
+    def subtitle_delay(self, value: float):
+        """设置字幕延迟（正值表示字幕延后，负值表示字幕提前）"""
+        try:
+            self.player.sub_delay = value
+        except:
+            pass
+    
+    @property
+    def subtitle_visibility(self) -> bool:
+        """获取字幕可见性"""
+        try:
+            return self.player.sub_visibility
+        except:
+            return True
+    
+    @subtitle_visibility.setter
+    def subtitle_visibility(self, value: bool):
+        """设置字幕可见性"""
+        try:
+            self.player.sub_visibility = value
+        except:
+            pass
+
     # ========== 回调设置 ==========
     
     def set_position_callback(self, callback: Callable):
