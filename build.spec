@@ -41,12 +41,12 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# 一目录模式（one-dir）：EXE 不包含数据文件，由 COLLECT 统一打包到输出目录
+# 相比单文件模式（one-file），一目录模式不需要每次启动时解压到临时目录，
+# 更稳定、不会被杀毒软件误杀，也不会出现临时目录冲突导致打不开的问题。
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
     name='视频播放器',
     debug=False,
@@ -54,11 +54,23 @@ exe = EXE(
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,  # 不显示控制台窗口
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     icon='icon.ico',  # 设置程序图标
+)
+
+# 收集所有文件到输出目录（dist/视频播放器/）
+# PyInstaller 6+ 会将依赖放入 _internal/ 子目录
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='视频播放器',
 )

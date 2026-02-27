@@ -4,6 +4,7 @@
 """
 import os
 import sys
+import logging
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QSlider, QLabel, QFileDialog, QSpinBox,
@@ -68,19 +69,6 @@ class SettingsDialog(QDialog):
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         
-        # 设置深色标题栏（Windows 10/11）
-        if sys.platform == 'win32':
-            try:
-                import ctypes
-                hwnd = int(self.winId())
-                DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
-                    ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int)
-                )
-            except:
-                pass
-        
         self.setStyleSheet(
             """
             QDialog { background-color: #1a1a1a; color: #e0e0e0; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; }
@@ -117,6 +105,21 @@ class SettingsDialog(QDialog):
             """
         )
         self._build()
+
+    def showEvent(self, event):
+        """窗口显示时设置深色标题栏（此时 HWND 已完整创建）"""
+        super().showEvent(event)
+        if not getattr(self, '_dark_titlebar_set', False):
+            self._dark_titlebar_set = True
+            if sys.platform == 'win32':
+                try:
+                    import ctypes
+                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                        int(self.winId()), 20,
+                        ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int)
+                    )
+                except Exception:
+                    pass
 
     def _build(self):
         layout = QVBoxLayout(self)
@@ -483,14 +486,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("视频播放器")
         self.setMinimumSize(900, 600)
         self.resize(1100, 700)
-        
-        # 设置窗口图标
+
         icon_path = os.path.join(os.path.dirname(__file__), 'icon.ico')
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
-        
-        # 设置深色标题栏（Windows 10/11）
-        self._set_dark_titlebar()
 
         self._apply_style()
 
@@ -507,8 +506,8 @@ class MainWindow(QMainWindow):
         self.player: PlayerCore | None = None
         self._current_file = None
         self._current_folder = None
-        self._folder_files = []  # 文件夹中的视频文件列表
-        self._current_index = -1  # 当前播放的文件索引
+        self._folder_files = []
+        self._current_index = -1
         self._is_seeking = False
         self._is_fullscreen = False
         self._controls_visible = True
@@ -517,8 +516,7 @@ class MainWindow(QMainWindow):
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self._hide_controls)
-        
-        # 连接视频结束信号（用于跨线程）
+
         self.videoEndedSignal.connect(self._on_video_ended)
         self.fileLoadedSignal.connect(self._on_file_loaded)
 
@@ -538,18 +536,24 @@ class MainWindow(QMainWindow):
 
     # ========== UI ========== #
     
+    def showEvent(self, event):
+        """窗口显示时调用（此时 HWND 已完整创建，DWM 调用更安全）"""
+        super().showEvent(event)
+        # 只在首次显示时设置深色标题栏
+        if not getattr(self, '_dark_titlebar_set', False):
+            self._dark_titlebar_set = True
+            self._set_dark_titlebar()
+
     def _set_dark_titlebar(self):
         """设置深色标题栏（Windows 10/11）"""
         if sys.platform == 'win32':
             try:
                 import ctypes
-                hwnd = int(self.winId())
-                DWMWA_USE_IMMERSIVE_DARK_MODE = 20
                 ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                    int(self.winId()), 20,
                     ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int)
                 )
-            except:
+            except Exception:
                 pass
 
     def _apply_style(self):
@@ -1577,8 +1581,18 @@ class MainWindow(QMainWindow):
             self.playlist_widget.raise_()
 
     def closeEvent(self, event):
-        # 保存播放进度
         self._save_current_progress()
+        self._timer.stop()
+        self._hide_timer.stop()
         if self.player:
-            self.player.terminate()
+            try:
+                # 先清除所有回调，防止 mpv 事件线程在 terminate() 后访问已销毁的 handle
+                self.player._on_position_changed = None
+                self.player._on_duration_changed = None
+                self.player._on_eof_reached = None
+                self.player._on_file_loaded = None
+                self.player.stop()
+            except Exception:
+                pass
+            self.player = None
         event.accept()
