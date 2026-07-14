@@ -22,6 +22,11 @@ class PlayerCore:
             osc=False,  # 禁用默认OSC，使用自定义控制
             keep_open=True,
             idle=True,
+            # 关闭 D3D11 flip-model 呈现（与 DWM 共享交换链）。
+            # 该模式在多显示器（尤其扩展屏）下可能触发硬件叠加平面，
+            # 使得画面始终显示在最上层，导致 PyQt 弹出菜单（倍速/字幕/音轨等）
+            # 被视频画面遮挡而"看不见"，但点击事件仍会正常处理。
+            d3d11_flip='no',
         )
         
         # 播放设置

@@ -96,7 +96,7 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QCheckBox
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtGui import QFont, QIcon, QFontDatabase
 
 # 注意：MainWindow 延迟导入（在 _main_inner 内），避免模块级 C 崩溃无法记录日志
 
@@ -119,7 +119,7 @@ class DefaultPlayerDialog(QDialog):
             QDialog {
                 background-color: #1a1a1a;
                 color: #fff;
-                font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+                font-family: "OPPO Sans 4.0", "Microsoft YaHei", "Segoe UI", sans-serif;
             }
             QLabel {
                 color: #e0e0e0;
@@ -280,6 +280,21 @@ def main():
         sys.exit(1)
 
 
+def _load_custom_font() -> str | None:
+    """加载项目内置的 OPPO Sans 字体文件，返回其字体家族名称（失败返回 None）"""
+    font_path = os.path.join(_get_resource_dir(), 'fonts', 'OPPOSans4.ttf')
+    if not os.path.exists(font_path):
+        return None
+    try:
+        font_id = QFontDatabase.addApplicationFont(font_path)
+        if font_id == -1:
+            return None
+        families = QFontDatabase.applicationFontFamilies(font_id)
+        return families[0] if families else None
+    except Exception:
+        return None
+
+
 def _main_inner():
     """实际的主函数逻辑"""
     # 延迟导入：确保 DLL 目录已注册，且任何 ImportError 都能被 main() 捕获
@@ -299,7 +314,8 @@ def _main_inner():
     app.setApplicationVersion(__version__)
     app.setOrganizationName("Player")
 
-    font = QFont("Microsoft YaHei", 10)
+    custom_family = _load_custom_font()
+    font = QFont(custom_family or "Microsoft YaHei", 10)
     app.setFont(font)
 
     window = MainWindow()

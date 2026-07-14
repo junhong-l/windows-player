@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 
 block_cipher = None
 
@@ -7,8 +8,11 @@ datas = [
     ('icon.ico', '.'),  # 图标文件
 ]
 
+# 打包自定义字体（如果存在）
+if os.path.exists('fonts/OPPOSans4.ttf'):
+    datas.append(('fonts/OPPOSans4.ttf', 'fonts'))
+
 # 如果存在 libmpv-2.dll，也要打包进去
-import os
 if os.path.exists('libmpv-2.dll'):
     datas.append(('libmpv-2.dll', '.'))
 

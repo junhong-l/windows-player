@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox, QFrame, QSizePolicy, QMessageBox, QApplication,
     QDialog, QFormLayout, QMenu, QListWidget, QSplitter, QListWidgetItem
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QRect
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QAction, QKeySequence, QIcon
 import qtawesome as qta
 
@@ -71,7 +71,7 @@ class SettingsDialog(QDialog):
         
         self.setStyleSheet(
             """
-            QDialog { background-color: #1a1a1a; color: #e0e0e0; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; }
+            QDialog { background-color: #1a1a1a; color: #e0e0e0; font-family: "OPPO Sans 4.0", "Microsoft YaHei", "Segoe UI", sans-serif; }
             QLabel { font-size: 13px; color: #e0e0e0; background: transparent; }
             QSpinBox, QDoubleSpinBox { 
                 background: #2a2a2a; 
@@ -543,6 +543,9 @@ class MainWindow(QMainWindow):
         if not getattr(self, '_dark_titlebar_set', False):
             self._dark_titlebar_set = True
             self._set_dark_titlebar()
+        # 首次显示时窗口尺寸可能尚未完全稳定，延迟校正一次控制栏位置，
+        # 避免出现控制栏悬浮在窗口中间的问题
+        QTimer.singleShot(0, self._update_control_bar_geometry)
 
     def _set_dark_titlebar(self):
         """设置深色标题栏（Windows 10/11）"""
@@ -560,7 +563,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             """
             QMainWindow { background-color: #000; }
-            QWidget { background-color: transparent; color: #fff; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; }
+            QWidget { background-color: transparent; color: #fff; font-family: "OPPO Sans 4.0", "Microsoft YaHei", "Segoe UI", sans-serif; }
             QLabel { color: #fff; background: transparent; }
             QSlider::groove:horizontal { background: rgba(255,255,255,0.3); height: 3px; border-radius: 1px; }
             QSlider::handle:horizontal { background: #00a1d6; width: 12px; height: 12px; margin: -5px 0; border-radius: 6px; }
@@ -755,11 +758,11 @@ class MainWindow(QMainWindow):
         btn_row.addStretch()
 
         # 右侧：片头片尾、列表、倍速、设置、音量、全屏、返回
-        self.skip_intro_btn = self._mk_text_btn("片头 0s", "跳过片头（点击设置）")
+        self.skip_intro_btn = self._mk_icon_btn("fa5s.door-open", "跳过片头（点击设置）")
         self.skip_intro_btn.clicked.connect(self._set_skip_intro)
         btn_row.addWidget(self.skip_intro_btn)
         
-        self.skip_outro_btn = self._mk_text_btn("片尾 0s", "跳过片尾（点击设置）")
+        self.skip_outro_btn = self._mk_icon_btn("fa5s.door-closed", "跳过片尾（点击设置）")
         self.skip_outro_btn.clicked.connect(self._set_skip_outro)
         btn_row.addWidget(self.skip_outro_btn)
         
@@ -767,15 +770,15 @@ class MainWindow(QMainWindow):
         self.list_btn.clicked.connect(self._show_playlist)
         btn_row.addWidget(self.list_btn)
         
-        self.speed_btn = self._mk_text_btn("倍速", "播放速度")
+        self.speed_btn = self._mk_icon_btn("fa5s.tachometer-alt", "播放速度")
         self.speed_btn.clicked.connect(self._show_speed_menu)
         btn_row.addWidget(self.speed_btn)
         
-        self.audio_btn = self._mk_text_btn("音轨", "选择音轨")
+        self.audio_btn = self._mk_icon_btn("fa5s.headphones", "选择音轨")
         self.audio_btn.clicked.connect(self._show_audio_menu)
         btn_row.addWidget(self.audio_btn)
         
-        self.subtitle_btn = self._mk_text_btn("字幕", "选择字幕")
+        self.subtitle_btn = self._mk_icon_btn("fa5s.closed-captioning", "选择字幕")
         self.subtitle_btn.clicked.connect(self._show_subtitle_menu)
         btn_row.addWidget(self.subtitle_btn)
 
@@ -783,17 +786,32 @@ class MainWindow(QMainWindow):
         self.settings_btn.clicked.connect(self._show_settings)
         btn_row.addWidget(self.settings_btn)
 
-        self.mute_btn = self._mk_icon_btn("fa5s.volume-up", "静音")
-        self.mute_btn.clicked.connect(self._toggle_mute)
+        self.mute_btn = self._mk_icon_btn("fa5s.volume-up", "音量")
+        self.mute_btn.clicked.connect(self._toggle_volume_popup)
         btn_row.addWidget(self.mute_btn)
 
-        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        # 音量滑块改为悬浮弹出面板，点击音量按钮时才显示，不再一直占用控制栏空间
+        self.volume_popup = QWidget(central)
+        self.volume_popup.setObjectName("volumePopup")
+        self.volume_popup.setStyleSheet("""
+            QWidget#volumePopup {
+                background: rgba(30, 30, 30, 0.92);
+                border: 1px solid #444;
+                border-radius: 6px;
+            }
+        """)
+        popup_layout = QVBoxLayout(self.volume_popup)
+        popup_layout.setContentsMargins(8, 10, 8, 10)
+
+        self.volume_slider = QSlider(Qt.Orientation.Vertical)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(100)
-        self.volume_slider.setFixedWidth(80)
-        self.volume_slider.setFixedHeight(20)
+        self.volume_slider.setFixedHeight(100)
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
-        btn_row.addWidget(self.volume_slider)
+        popup_layout.addWidget(self.volume_slider, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        self.volume_popup.setFixedSize(40, 130)
+        self.volume_popup.hide()
 
         self.full_btn = self._mk_icon_btn("fa5s.expand", "全屏")
         self.full_btn.clicked.connect(self._toggle_fullscreen)
@@ -1046,10 +1064,10 @@ class MainWindow(QMainWindow):
         self.player.skip_intro = f_settings.skip_intro
         self.player.skip_outro = f_settings.skip_outro
         
-        # 更新UI显示
-        self.speed_btn.setText(f"{g_settings.speed}x" if g_settings.speed != 1.0 else "倍速")
-        self.skip_intro_btn.setText(f"片头 {f_settings.skip_intro}s" if f_settings.skip_intro > 0 else "片头")
-        self.skip_outro_btn.setText(f"片尾 {f_settings.skip_outro}s" if f_settings.skip_outro > 0 else "片尾")
+        # 更新UI显示（图标按钮通过 tooltip 显示当前状态）
+        self.speed_btn.setToolTip(f"播放速度（当前 {g_settings.speed}x）" if g_settings.speed != 1.0 else "播放速度")
+        self.skip_intro_btn.setToolTip(f"跳过片头（当前 {f_settings.skip_intro}s，点击设置）" if f_settings.skip_intro > 0 else "跳过片头（点击设置）")
+        self.skip_outro_btn.setToolTip(f"跳过片尾（当前 {f_settings.skip_outro}s，点击设置）" if f_settings.skip_outro > 0 else "跳过片尾（点击设置）")
         
         # 更新播放列表当前项
         if self._folder_files:
@@ -1171,6 +1189,22 @@ class MainWindow(QMainWindow):
         icon_name = 'fa5s.volume-mute' if self.player.muted else 'fa5s.volume-up'
         self.mute_btn.setIcon(qta.icon(icon_name, color='#ffffff'))
 
+    def _toggle_volume_popup(self):
+        """点击音量按钮时显示/隐藏音量滑块弹出面板"""
+        if self.volume_popup.isVisible():
+            self.volume_popup.hide()
+        else:
+            self._position_volume_popup()
+            self.volume_popup.show()
+            self.volume_popup.raise_()
+
+    def _position_volume_popup(self):
+        """将音量弹出面板定位到音量按钮正上方"""
+        btn_top_left = self.mute_btn.mapTo(self.centralWidget(), self.mute_btn.rect().topLeft())
+        x = btn_top_left.x() + (self.mute_btn.width() - self.volume_popup.width()) // 2
+        y = btn_top_left.y() - self.volume_popup.height() - 6
+        self.volume_popup.move(max(0, x), max(0, y))
+
     # ========== 播放列表 ========== #
 
     def _show_playlist(self):
@@ -1226,7 +1260,7 @@ class MainWindow(QMainWindow):
         if action and self.player:
             speed = action.data()
             self.player.speed = speed
-            self.speed_btn.setText(f"{speed}x" if speed != 1.0 else "倍速")
+            self.speed_btn.setToolTip(f"播放速度（当前 {speed}x）" if speed != 1.0 else "播放速度")
             # 只影响当前播放，不保存到全局设置
 
     def _show_audio_menu(self):
@@ -1272,11 +1306,11 @@ class MainWindow(QMainWindow):
         if action and self.player:
             track_id = action.data()
             self.player.set_audio_track(track_id)
-            # 更新按钮显示
+            # 更新按钮提示
             for track in tracks:
                 if track['id'] == track_id:
                     lang = track['lang'] or ""
-                    self.audio_btn.setText(f"音轨 {lang}" if lang else "音轨")
+                    self.audio_btn.setToolTip(f"选择音轨（当前 {lang}）" if lang else "选择音轨")
                     break
 
     def _show_subtitle_menu(self):
@@ -1358,12 +1392,12 @@ class MainWindow(QMainWindow):
                 self.player.set_subtitle_track(data)
                 # 更新按钮显示
                 if data == 0:
-                    self.subtitle_btn.setText("字幕")
+                    self.subtitle_btn.setToolTip("选择字幕")
                 else:
                     for track in tracks:
                         if track['id'] == data:
                             lang = track['lang'] or ""
-                            self.subtitle_btn.setText(f"字幕 {lang}" if lang else "字幕")
+                            self.subtitle_btn.setToolTip(f"选择字幕（当前 {lang}）" if lang else "选择字幕")
                             break
     
     def _load_external_subtitle(self):
@@ -1414,45 +1448,109 @@ class MainWindow(QMainWindow):
             if self.player:
                 self.player.speed = speed
                 self.player.seek_step = seek_step
-                self.speed_btn.setText(f"{speed}x" if speed != 1.0 else "倍速")
+                self.speed_btn.setToolTip(f"播放速度（当前 {speed}x）" if speed != 1.0 else "播放速度")
     
     def _set_skip_intro(self):
         """设置跳过片头时间 - 默认值为当前播放位置"""
         if not self._current_file or not self.player:
             return
         
-        from PyQt6.QtWidgets import QInputDialog
         # 获取当前播放位置作为默认值
         current_pos = int(self.player.position) if self.player.position else 0
-        value, ok = QInputDialog.getInt(
-            self, "跳过片头", 
-            "设置跳过片头秒数（针对当前文件夹）：\n当前位置已自动填入",
-            current_pos, 0, 600, 1
+        value, ok = self._ask_skip_seconds(
+            "跳过片头",
+            "设置跳过片头的秒数（针对当前文件夹，范围 0~600 秒）：\n当前播放位置已自动填入",
+            current_pos
         )
         if ok:
             self.player.skip_intro = value
             folder_settings.update_settings(self._current_file, skip_intro=value)
-            self.skip_intro_btn.setText(f"片头 {value}s" if value > 0 else "片头")
+            self.skip_intro_btn.setToolTip(f"跳过片头（当前 {value}s，点击设置）" if value > 0 else "跳过片头（点击设置）")
     
     def _set_skip_outro(self):
         """设置跳过片尾时间 - 默认值为距离视频结尾的时间"""
         if not self._current_file or not self.player:
             return
         
-        from PyQt6.QtWidgets import QInputDialog
         # 获取距离视频结尾的时间作为默认值
         duration = self.player.duration or 0
         current_pos = self.player.position or 0
         time_to_end = int(duration - current_pos) if duration > current_pos else 0
-        value, ok = QInputDialog.getInt(
-            self, "跳过片尾", 
-            "设置跳过片尾秒数（针对当前文件夹）：\n距结尾时间已自动填入",
-            time_to_end, 0, 600, 1
+        value, ok = self._ask_skip_seconds(
+            "跳过片尾",
+            "设置跳过片尾的秒数（针对当前文件夹，范围 0~600 秒）：\n距视频结尾的时间已自动填入",
+            time_to_end
         )
         if ok:
             self.player.skip_outro = value
             folder_settings.update_settings(self._current_file, skip_outro=value)
-            self.skip_outro_btn.setText(f"片尾 {value}s" if value > 0 else "片尾")
+            self.skip_outro_btn.setToolTip(f"跳过片尾（当前 {value}s，点击设置）" if value > 0 else "跳过片尾（点击设置）")
+
+    def _ask_skip_seconds(self, title: str, hint: str, default_value: int) -> tuple[int, bool]:
+        """弹出中文数字输入对话框，用于设置跳过秒数（0~600，无上下箭头）"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setFixedSize(340, 170)
+        icon_path = os.path.join(os.path.dirname(__file__), 'icon.ico')
+        if os.path.exists(icon_path):
+            dialog.setWindowIcon(QIcon(icon_path))
+        dialog.setStyleSheet("""
+            QDialog { background-color: #1a1a1a; color: #e0e0e0; font-family: "OPPO Sans 4.0", "Microsoft YaHei", "Segoe UI", sans-serif; }
+            QLabel { font-size: 13px; color: #e0e0e0; background: transparent; }
+            QSpinBox {
+                background: #2a2a2a;
+                border: 1px solid #404040;
+                border-radius: 4px;
+                padding: 8px 12px;
+                color: #fff;
+                font-size: 13px;
+            }
+            QSpinBox:focus { border-color: #00a1d6; }
+            QSpinBox::up-button, QSpinBox::down-button { width: 0px; border: none; }
+            QPushButton {
+                background: #00a1d6;
+                color: #fff;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 20px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background: #00b5e5; }
+            QPushButton#cancelBtn { background: #444; }
+            QPushButton#cancelBtn:hover { background: #666; }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 20, 20, 16)
+        layout.setSpacing(14)
+
+        hint_label = QLabel(hint)
+        hint_label.setWordWrap(True)
+        layout.addWidget(hint_label)
+
+        spin = QSpinBox()
+        spin.setRange(0, 600)
+        spin.setSuffix(" 秒")
+        spin.setValue(max(0, min(600, default_value)))
+        spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        layout.addWidget(spin)
+
+        layout.addStretch()
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setObjectName("cancelBtn")
+        cancel_btn.clicked.connect(dialog.reject)
+        ok_btn = QPushButton("确定")
+        ok_btn.clicked.connect(dialog.accept)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(ok_btn)
+        layout.addLayout(btn_row)
+
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        return spin.value(), accepted
 
     # ========== 全屏 ========== #
 
@@ -1467,6 +1565,11 @@ class MainWindow(QMainWindow):
         self.showFullScreen()
         self.full_btn.setIcon(qta.icon('fa5s.compress', color='#ffffff'))
         self._maybe_start_hide_timer()
+        # showFullScreen() 切换时（尤其是在扩展屏/不同DPI的情况下）resizeEvent
+        # 可能会用过渡态的旧尺寸触发一次，导致控制栏悬浮位置计算错误。
+        # 这里立即重新计算一次，并在事件循环空闲后再校正一次，确保最终尺寸生效。
+        self._update_control_bar_geometry()
+        QTimer.singleShot(0, self._update_control_bar_geometry)
 
     def _exit_fullscreen(self):
         if self._is_fullscreen:
@@ -1474,6 +1577,8 @@ class MainWindow(QMainWindow):
             self.showNormal()
             self.full_btn.setIcon(qta.icon('fa5s.expand', color='#ffffff'))
             self._show_controls(persist=True)
+            self._update_control_bar_geometry()
+            QTimer.singleShot(0, self._update_control_bar_geometry)
 
     # ========== 拖放 ========== #
 
@@ -1521,6 +1626,18 @@ class MainWindow(QMainWindow):
         # 不自动显示控制栏，只有移动到底部才显示
         super().enterEvent(event)
 
+    def mousePressEvent(self, event):
+        """点击音量弹出面板和音量按钮之外的区域时，自动收起音量面板"""
+        if hasattr(self, 'volume_popup') and self.volume_popup.isVisible():
+            central = self.centralWidget()
+            pos = central.mapFromGlobal(event.globalPosition().toPoint())
+            in_popup = self.volume_popup.geometry().contains(pos)
+            btn_rect = QRect(self.mute_btn.mapTo(central, self.mute_btn.rect().topLeft()), self.mute_btn.size())
+            in_btn = btn_rect.contains(pos)
+            if not in_popup and not in_btn:
+                self.volume_popup.hide()
+        super().mousePressEvent(event)
+
     # ========== 工具 ========== #
 
     @staticmethod
@@ -1542,6 +1659,8 @@ class MainWindow(QMainWindow):
 
     def _show_controls(self, persist: bool = False):
         """显示控制栏"""
+        # 先刷新一次几何位置，避免使用过时的窗口尺寸导致控制栏悬浮在错误位置
+        self._update_control_bar_geometry()
         if not self._controls_visible:
             self.control_widget.show()
             self._controls_visible = True
@@ -1554,12 +1673,17 @@ class MainWindow(QMainWindow):
             return
         self.control_widget.hide()
         self._controls_visible = False
+        if hasattr(self, 'volume_popup'):
+            self.volume_popup.hide()
 
     def resizeEvent(self, event):
         """窗口大小改变时更新控制栏和播放列表位置"""
         super().resizeEvent(event)
         self._update_control_bar_geometry()
         self._update_playlist_geometry()
+        self._update_control_bar_responsive()
+        if hasattr(self, 'volume_popup'):
+            self.volume_popup.hide()
     
     def _update_control_bar_geometry(self):
         """更新控制栏位置和大小"""
@@ -1570,6 +1694,19 @@ class MainWindow(QMainWindow):
             self.centralWidget().width(), 
             50
         )
+
+    def _update_control_bar_responsive(self):
+        """窗口宽度不足时，按优先级隐藏部分按钮以节省空间"""
+        width = self.centralWidget().width()
+
+        # 宽度不足时，依次隐藏：音轨/字幕 -> 快进/快退
+        show_audio_subtitle = width >= 1050
+        show_seek = width >= 950
+
+        for btn in (self.audio_btn, self.subtitle_btn):
+            btn.setVisible(show_audio_subtitle)
+        for btn in (self.back_btn, self.fwd_btn):
+            btn.setVisible(show_seek)
     
     def _update_playlist_geometry(self):
         """更新播放列表位置（右侧悬浮）"""
