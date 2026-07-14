@@ -33,7 +33,7 @@
 ### 方式三：自行打包
 
 ```bash
-# 需要先安装 Inno Setup 6（https://jrsoftware.org/isdl.php）
+# 需要先安装 Inno Setup（6 或以上版本均可，https://jrsoftware.org/isdl.php）
 python build.py
 # 输出：dist\视频播放器_安装包_vX.X.X.exe
 ```
@@ -183,7 +183,7 @@ windows-player/
 ## 📦 打包为安装包
 
 ```bash
-# 需要先安装 Inno Setup 6（https://jrsoftware.org/isdl.php）
+# 需要先安装 Inno Setup（6 或以上版本均可，https://jrsoftware.org/isdl.php）
 python build.py
 # 输出：dist\视频播放器_安装包_vX.X.X.exe
 ```
@@ -199,7 +199,7 @@ python build.py
 - python-mpv
 - qtawesome
 - darkdetect
-- PyInstaller + Inno Setup 6（仅用于打包）
+- PyInstaller + Inno Setup 6+（仅用于打包）
 
 ## 📝 许可证
 

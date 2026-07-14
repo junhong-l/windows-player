@@ -113,6 +113,8 @@ def build():
 def find_inno_setup() -> str:
     """查找 Inno Setup 编译器路径"""
     candidates = [
+        r"C:\Program Files (x86)\Inno Setup 7\ISCC.exe",
+        r"C:\Program Files\Inno Setup 7\ISCC.exe",
         r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
         r"C:\Program Files\Inno Setup 6\ISCC.exe",
         r"C:\Program Files (x86)\Inno Setup 5\ISCC.exe",
@@ -142,7 +144,7 @@ def build_installer():
     iscc = find_inno_setup()
     if not iscc:
         print("\n❌ 未找到 Inno Setup 编译器 (ISCC.exe)")
-        print("   请从 https://jrsoftware.org/isdl.php 下载并安装 Inno Setup 6")
+        print("   请从 https://jrsoftware.org/isdl.php 下载并安装 Inno Setup（6 或以上版本均可）")
         print("\n💡 安装后重新运行: python build.py --installer")
         return False
 
