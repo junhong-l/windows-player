@@ -1,8 +1,8 @@
 """
-打包脚本（一目录模式 + 可选生成安装包）
+打包脚本（一目录模式 PyInstaller 构建 + Inno Setup 生成安装包）
 运行方法:
-  python build.py           # 只打包，输出到 dist\视频播放器\
-  python build.py --installer  # 打包 + 使用 Inno Setup 生成安装程序
+  python build.py            # 打包并生成安装包（默认，输出 dist\视频播放器_安装包_vX.X.X.exe）
+  python build.py --dir-only # 仅 PyInstaller 打包，不生成安装包，输出 dist\视频播放器\ 目录
 """
 import os
 import sys
@@ -107,8 +107,6 @@ def build():
     print("=" * 50)
     print(f"\n📁 输出目录: {DIST_DIR}")
     print(f"📊 目录总大小: {size_mb:.1f} MB")
-    print(f"\n⚠️  注意：直接运行需将整个 '{APP_NAME}' 目录发给用户，")
-    print(f"    使用 --installer 选项可生成单文件安装包。")
     return True
 
 
@@ -184,14 +182,15 @@ def build_installer():
 
 
 def main():
-    make_installer = '--installer' in sys.argv
+    # 默认打包并生成安装包；--dir-only 时仅保留 PyInstaller 的一目录输出，不生成安装包
+    dir_only = '--dir-only' in sys.argv
 
     print("=" * 50)
     print("🎬 视频播放器打包工具")
-    if make_installer:
-        print("   模式：PyInstaller + Inno Setup 安装包")
+    if dir_only:
+        print("   模式：仅 PyInstaller 一目录打包")
     else:
-        print("   模式：PyInstaller 一目录打包")
+        print("   模式：PyInstaller + Inno Setup 安装包")
     print("=" * 50)
 
     # 切换到脚本所在目录
@@ -208,17 +207,19 @@ def main():
     if not build():
         sys.exit(1)
 
-    # 生成安装包
-    if make_installer:
-        if build_installer():
-            # 安装包已生成，删除中间产物（PyInstaller 输出目录 + 中间 exe）
-            if os.path.exists(DIST_DIR):
-                shutil.rmtree(DIST_DIR)
-            mid_exe = os.path.join('dist', EXE_NAME)
-            if os.path.exists(mid_exe):
-                os.remove(mid_exe)
+    # 生成安装包（默认行为）
+    if not dir_only:
+        if not build_installer():
+            sys.exit(1)
+        # 安装包已生成，删除中间产物（PyInstaller 输出目录 + 中间 exe）
+        if os.path.exists(DIST_DIR):
+            shutil.rmtree(DIST_DIR)
+        mid_exe = os.path.join('dist', EXE_NAME)
+        if os.path.exists(mid_exe):
+            os.remove(mid_exe)
     else:
-        print("\n💡 提示：运行 'python build.py --installer' 可额外生成 Inno Setup 安装包")
+        print(f"\n⚠️  注意：--dir-only 模式需将整个 '{APP_NAME}' 目录发给用户才能运行。")
+        print("💡 提示：直接运行 'python build.py'（不带参数）可生成完整安装包。")
 
 
 if __name__ == '__main__':

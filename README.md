@@ -34,7 +34,7 @@
 
 ```bash
 # 需要先安装 Inno Setup 6（https://jrsoftware.org/isdl.php）
-python build.py --installer
+python build.py
 # 输出：dist\视频播放器_安装包_vX.X.X.exe
 ```
 
@@ -184,11 +184,11 @@ windows-player/
 
 ```bash
 # 需要先安装 Inno Setup 6（https://jrsoftware.org/isdl.php）
-python build.py --installer
+python build.py
 # 输出：dist\视频播放器_安装包_vX.X.X.exe
 ```
 
-打包完成后 `dist\` 目录只保留安装包，中间产物自动清理。
+打包完成后 `dist\` 目录只保留安装包，中间产物自动清理。若只需要 PyInstaller 的一目录输出（不生成安装包），可使用 `python build.py --dir-only`。
 
 **修改版本号**：只需编辑 `version.py` 中的 `__version__`，打包时自动同步到安装包文件名和安装界面。
 
