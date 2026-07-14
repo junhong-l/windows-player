@@ -16,6 +16,17 @@ if os.path.exists('fonts/OPPOSans4.ttf'):
 if os.path.exists('libmpv-2.dll'):
     datas.append(('libmpv-2.dll', '.'))
 
+# 打包 Qt 中文翻译文件（修复 QInputDialog 等标准对话框按钮显示英文的问题）
+try:
+    from PyQt6.QtCore import QLibraryInfo
+    _qt_tr_dir = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    for _qm in ('qtbase_zh_CN.qm', 'qtbase_zh_TW.qm'):
+        _qm_path = os.path.join(_qt_tr_dir, _qm)
+        if os.path.exists(_qm_path):
+            datas.append((_qm_path, 'PyQt6/Qt6/translations'))
+except Exception:
+    pass
+
 # 需要的隐藏导入
 hiddenimports = [
     'mpv',

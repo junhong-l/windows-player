@@ -577,6 +577,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self):
         central = QWidget()
+        central.setStyleSheet("background-color: #000000;")
         self.setCentralWidget(central)
         self.setMouseTracking(True)
         central.setMouseTracking(True)
@@ -586,6 +587,7 @@ class MainWindow(QMainWindow):
         from PyQt6.QtWidgets import QStackedWidget
         self.stacked_widget = QStackedWidget()
         self.stacked_widget.setMouseTracking(True)
+        self.stacked_widget.setStyleSheet("background-color: #000000;")
         
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -683,6 +685,7 @@ class MainWindow(QMainWindow):
         # ===== 播放页 =====
         self.player_page = QWidget()
         self.player_page.setMouseTracking(True)
+        self.player_page.setStyleSheet("background-color: #000000;")
         player_layout = QVBoxLayout(self.player_page)
         player_layout.setContentsMargins(0, 0, 0, 0)
         player_layout.setSpacing(0)
@@ -1562,6 +1565,12 @@ class MainWindow(QMainWindow):
 
     def _enter_fullscreen(self):
         self._is_fullscreen = True
+        # Windows 11 会给窗口绘制一条 1px 的 DWM 强调色边框，即使调用了
+        # showFullScreen() 该边框依然可见（表现为四周的白边）。这里在进入
+        # 全屏前显式去掉边框颜色（不改变窗口原生边框标志，不影响 mpv 嵌入
+        # 的子窗口句柄），从根源上消除该边框。
+        self._set_dwm_border(enabled=False)
+        self._set_dwm_corner(rounded=False)
         self.showFullScreen()
         self.full_btn.setIcon(qta.icon('fa5s.compress', color='#ffffff'))
         self._maybe_start_hide_timer()
@@ -1575,10 +1584,46 @@ class MainWindow(QMainWindow):
         if self._is_fullscreen:
             self._is_fullscreen = False
             self.showNormal()
+            self._set_dwm_border(enabled=True)
+            self._set_dwm_corner(rounded=True)
             self.full_btn.setIcon(qta.icon('fa5s.expand', color='#ffffff'))
             self._show_controls(persist=True)
             self._update_control_bar_geometry()
             QTimer.singleShot(0, self._update_control_bar_geometry)
+
+    def _set_dwm_border(self, enabled: bool):
+        """启用/禁用 Windows 11 窗口的 DWM 强调色边框（全屏时需要禁用，
+        否则四周会露出一条 1px 的亮色边框）"""
+        if sys.platform != 'win32':
+            return
+        try:
+            import ctypes
+            # DWMWA_BORDER_COLOR = 34；DWMWA_COLOR_NONE = 0xFFFFFFFE（不绘制边框）
+            # DWMWA_COLOR_DEFAULT = 0xFFFFFFFF（恢复系统默认边框）
+            color = ctypes.c_int(-1 if enabled else -2)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                int(self.winId()), 34,
+                ctypes.byref(color), ctypes.sizeof(color)
+            )
+        except Exception:
+            pass
+
+    def _set_dwm_corner(self, rounded: bool):
+        """设置/恢复 Windows 11 窗口圆角（全屏时需要关闭圆角，否则窗口
+        左右下角仍是圆角，会露出下方桌面背景，表现为底部两角漏色）"""
+        if sys.platform != 'win32':
+            return
+        try:
+            import ctypes
+            # DWMWA_WINDOW_CORNER_PREFERENCE = 33
+            # DWMWCP_DEFAULT = 0（系统默认，圆角）；DWMWCP_DONOTROUND = 1（直角）
+            preference = ctypes.c_int(0 if rounded else 1)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                int(self.winId()), 33,
+                ctypes.byref(preference), ctypes.sizeof(preference)
+            )
+        except Exception:
+            pass
 
     # ========== 拖放 ========== #
 

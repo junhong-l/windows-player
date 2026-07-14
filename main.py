@@ -95,7 +95,7 @@ from PyQt6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QCheckBox
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QLibraryInfo, QLocale, QTranslator
 from PyQt6.QtGui import QFont, QIcon, QFontDatabase
 
 # 注意：MainWindow 延迟导入（在 _main_inner 内），避免模块级 C 崩溃无法记录日志
@@ -280,6 +280,19 @@ def main():
         sys.exit(1)
 
 
+def _load_qt_translations(app: QApplication):
+    """加载 Qt 内置中文翻译，使 QInputDialog/QMessageBox 等标准按钮（OK/Cancel）显示为中文"""
+    search_dirs = [
+        os.path.join(_get_resource_dir(), 'PyQt6', 'Qt6', 'translations'),
+        QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath),
+    ]
+    translator = QTranslator(app)
+    for translations_dir in search_dirs:
+        if translations_dir and translator.load(QLocale.system(), 'qtbase', '_', translations_dir):
+            app.installTranslator(translator)
+            return
+
+
 def _load_custom_font() -> str | None:
     """加载项目内置的 OPPO Sans 字体文件，返回其字体家族名称（失败返回 None）"""
     font_path = os.path.join(_get_resource_dir(), 'fonts', 'OPPOSans4.ttf')
@@ -313,6 +326,8 @@ def _main_inner():
     from version import __version__
     app.setApplicationVersion(__version__)
     app.setOrganizationName("Player")
+
+    _load_qt_translations(app)
 
     custom_family = _load_custom_font()
     font = QFont(custom_family or "Microsoft YaHei", 10)
