@@ -38,6 +38,7 @@ def check_files():
         'player_core.py',
         'folder_settings.py',
         'casting.py',
+        'airplay_receiver.py',
         'cast_dialog.py',
         'icon.ico',
         'build.spec',

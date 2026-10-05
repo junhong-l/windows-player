@@ -189,7 +189,8 @@ class PlayerCore:
     @property
     def volume(self) -> int:
         """音量（0-100）"""
-        return int(self.player.volume or 100)
+        volume = self.player.volume
+        return int(volume) if volume is not None else 100
     
     @volume.setter
     def volume(self, value: int):

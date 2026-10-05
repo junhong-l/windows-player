@@ -13,6 +13,15 @@ if os.name == 'nt':
 from PyQt6.QtCore import QPoint
 from PyQt6.QtWidgets import QApplication, QLabel, QMainWindow, QStackedWidget, QWidget
 from main_window import MainWindow
+from player_core import PlayerCore
+
+
+class PlaybackValueTests(unittest.TestCase):
+    def test_volume_preserves_zero_and_defaults_only_when_missing(self):
+        for value, expected in ((0, 0), (25.0, 25), (100, 100), (None, 100)):
+            with self.subTest(value=value):
+                core = SimpleNamespace(player=SimpleNamespace(volume=value))
+                self.assertEqual(PlayerCore.volume.fget(core), expected)
 
 
 class FullscreenTitleTests(unittest.TestCase):

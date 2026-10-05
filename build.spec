@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 block_cipher = None
 
@@ -10,6 +11,8 @@ datas = [
     ('third_party/set-default-player.ps1', 'third_party'),
     ('third_party/PS-SFTA-LICENSE.txt', 'third_party'),
 ]
+airplay_datas, airplay_binaries, airplay_imports = collect_all('pyatv')
+datas += airplay_datas + collect_data_files('imageio_ffmpeg')
 
 # 打包自定义字体（如果存在）
 if os.path.exists('fonts/OPPOSans4.ttf'):
@@ -47,9 +50,9 @@ hiddenimports = [
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=airplay_binaries,
     datas=datas,
-    hiddenimports=hiddenimports,
+    hiddenimports=hiddenimports + airplay_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

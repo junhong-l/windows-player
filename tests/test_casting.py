@@ -1,11 +1,13 @@
 import asyncio
 import logging
 import os
+import plistlib
 import tempfile
 import time
 import unittest
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from xml.etree import ElementTree
 
@@ -13,9 +15,54 @@ from aiohttp import ClientSession, web
 from async_upnp_client.aiohttp import AiohttpRequester
 from async_upnp_client.client_factory import UpnpFactory
 from async_upnp_client.const import HttpResponse
-from async_upnp_client.profiles.dlna import DmrDevice
+from async_upnp_client.profiles.dlna import DmrDevice, TransportState
 
 from casting import CastDevice, CastManager, MediaServer, normalize_renderer_response, search_devices, prepare_cast_media, video_encoder_args, probe_video_encoder, cast_speed_filters
+from airplay_receiver import AirPlayReceiver, inspect_airplay
+
+
+class AirPlayReceiverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_library_play_sends_binary_plist_once_and_resume_uses_rate(self):
+        receiver = AirPlayReceiver('192.168.1.2', 7002)
+        receiver._connection = Mock(post=AsyncMock(return_value=SimpleNamespace(code=200)))
+        await receiver.async_set_transport_uri('http://192.168.1.3/video.mp4', 'video')
+        await receiver.async_play()
+        arguments = receiver._connection.post.await_args
+        self.assertEqual(arguments.args[0], '/play')
+        self.assertEqual(plistlib.loads(arguments.kwargs['body'])['Content-Location'], 'http://192.168.1.3/video.mp4')
+        await receiver.async_pause()
+        await receiver.async_play()
+        self.assertEqual([call.args[0] for call in receiver._connection.post.await_args_list],
+                         ['/play', '/rate?value=0', '/rate?value=1'])
+        await receiver.close()
+
+    async def test_stop_after_play_response_timeout_does_not_retry_play(self):
+        receiver = AirPlayReceiver('192.168.1.2', 7002)
+        receiver._connection = Mock(post=AsyncMock(side_effect=[TimeoutError(), SimpleNamespace(code=200)]))
+        await receiver.async_set_transport_uri('http://192.168.1.3/video.mp4', 'video')
+        with self.assertRaises(TimeoutError):
+            await receiver.async_play()
+        await receiver.async_stop()
+        await receiver.async_stop()
+        self.assertEqual([call.args[0] for call in receiver._connection.post.await_args_list], ['/play', '/stop'])
+        await receiver.close()
+
+    async def test_read_only_state_and_controls(self):
+        receiver = AirPlayReceiver('192.168.1.2', 7002)
+        receiver._connection = Mock(get=AsyncMock(return_value=SimpleNamespace(body=plistlib.dumps(dict(readyToPlay=True, position=12, duration=100, rate=1)))),
+                                    post=AsyncMock(return_value=SimpleNamespace(code=200)))
+        await receiver.async_update()
+        self.assertEqual(receiver.transport_state.value, 'PLAYING')
+        self.assertEqual(receiver.media_position, 12)
+        await receiver.async_seek_rel_time(timedelta(seconds=30))
+        receiver._connection.post.assert_awaited_with('/scrub?position=30')
+        self.assertFalse(receiver.has_volume_level)
+        await receiver.close()
+
+    async def test_inspection_rejects_non_lan_or_credential_addresses(self):
+        for location in ('http://8.8.8.8:7000', 'http://127.0.0.1:7000', 'https://192.168.1.2:7000', 'http://user:pass@192.168.1.2:7000'):
+            with self.assertRaises(ValueError):
+                await inspect_airplay(location)
 
 
 class VideoEncoderTests(unittest.IsolatedAsyncioTestCase):
@@ -90,6 +137,17 @@ class CastDialogTests(unittest.TestCase):
             self.assertFalse(dialog.encoder_combo.isEnabled())
             self.assertFalse(dialog.speed_combo.isEnabled())
             self.assertEqual(dialog.speed_combo.currentData(), 1)
+            for combo in (dialog.delivery_combo, dialog.encoder_combo, dialog.speed_combo):
+                self.assertEqual(combo.currentText(), '此模式不可修改')
+                self.assertTrue(combo.lineEdit().isReadOnly())
+            self.assertEqual(dialog.encoder_combo.currentData(), 'amf')
+            dialog._on_encoders(['cpu', 'nvenc', 'amf'])
+            self.assertEqual(dialog.encoder_combo.currentText(), '此模式不可修改')
+            dialog.quality_combo.setCurrentIndex(dialog.quality_combo.findData(2160))
+            self.assertEqual(dialog.encoder_combo.currentData(), 'amf')
+            self.assertEqual(dialog.encoder_combo.currentText(), 'AMD AMF')
+            self.assertEqual(dialog.speed_combo.currentText(), '1x')
+            self.assertEqual(dialog.delivery_combo.currentText(), '实时（边转边播）')
         finally:
             dialog._volume_timer.stop()
             dialog.deleteLater()
@@ -105,17 +163,45 @@ class CastDialogTests(unittest.TestCase):
                 dialog._on_devices([CastDevice('TV', 'http://192.168.1.2/description.xml', '192.168.1.2', 'uuid:tv')])
                 dialog._on_encoders(['cpu', 'nvenc'])
                 dialog.encoder_combo.setCurrentIndex(dialog.encoder_combo.findData('nvenc'))
-                dialog.quality_combo.setCurrentIndex(dialog.quality_combo.findData(1440))
+                dialog.quality_combo.setCurrentIndex(dialog.quality_combo.findData(2160))
                 dialog.speed_combo.setCurrentIndex(dialog.speed_combo.findData(1.5))
                 dialog._start()
                 self.assertEqual(manager.start.call_args.kwargs['encoder'], 'nvenc')
                 self.assertEqual(manager.start.call_args.kwargs['duration'], 120)
-                self.assertEqual(manager.start.call_args.kwargs['resolution'], 1440)
+                self.assertEqual(manager.start.call_args.kwargs['resolution'], 2160)
                 self.assertEqual(manager.start.call_args.kwargs['speed'], 1.5)
             finally:
                 dialog._volume_timer.stop()
                 dialog.deleteLater()
 
+
+    def test_airplay_selection_defaults_raw_and_compatibility_supports_live_hls(self):
+        from cast_dialog import CastDialog
+        manager = Mock(busy=False, connected=False)
+        dialog = CastDialog(manager, lambda: ('', 0))
+        try:
+            dialog._on_devices([CastDevice('Vidda', 'http://192.168.9.33:7002/server-info', '192.168.9.33', 'airplay:192.168.9.33', 'airplay')])
+            self.assertIsNone(dialog.quality_combo.currentData())
+            for combo in (dialog.delivery_combo, dialog.encoder_combo, dialog.speed_combo):
+                self.assertEqual(combo.currentText(), '此模式不可修改')
+            self.assertFalse(dialog.speed_combo.isEnabled())
+            self.assertIn('原画', dialog.speed_combo.toolTip())
+            self.assertIn('兼容画质', dialog.speed_combo.toolTip())
+            self.assertEqual(dialog.delivery_combo.currentData(), 'stream')
+            self.assertFalse(dialog.delivery_combo.isEnabled())
+            self.assertIn('AirPlay', dialog.device_list.item(0).text())
+            dialog.quality_combo.setCurrentIndex(dialog.quality_combo.findData(720))
+            self.assertEqual(dialog.delivery_combo.currentText(), '实时（边转边播）')
+            self.assertTrue(dialog.delivery_combo.isEnabled())
+            self.assertIn('HLS', dialog.delivery_combo.toolTip())
+            self.assertTrue(dialog.encoder_combo.isEnabled())
+            self.assertTrue(dialog.speed_combo.isEnabled())
+            self.assertEqual(dialog.delivery_combo.currentData(), 'stream')
+            dialog.delivery_combo.setCurrentIndex(dialog.delivery_combo.findData('file'))
+            self.assertEqual(dialog.delivery_combo.currentText(), '完整缓存（备用）')
+        finally:
+            dialog._volume_timer.stop()
+            dialog.deleteLater()
 
     def test_status_is_not_periodically_polled_and_manual_sync_is_available(self):
         from cast_dialog import CastDialog
@@ -222,7 +308,7 @@ class CastPreparationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('setpts=(PTS-STARTPTS)/2', arguments[arguments.index('-vf') + 1])
                 self.assertIn('atempo=2', arguments[arguments.index('-af') + 1])
 
-    async def test_2k_conversion_uses_1440p_dimensions_and_level(self):
+    async def test_2k_and_4k_conversion_use_correct_dimensions_and_level(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'LOCALAPPDATA': directory}):
             path = Path(directory) / 'source.mp4'
             path.write_bytes(b'video')
@@ -236,12 +322,15 @@ class CastPreparationTests(unittest.IsolatedAsyncioTestCase):
                 return process
 
             with patch('casting.ffmpeg_executable', return_value='ffmpeg'), patch('casting.asyncio.create_subprocess_exec', side_effect=encode) as spawn:
-                await prepare_cast_media(str(path), 1440, Mock())
-            arguments = spawn.call_args.args
-            self.assertIn('2560', arguments[arguments.index('-vf') + 1])
-            self.assertIn('1440', arguments[arguments.index('-vf') + 1])
-            self.assertEqual(arguments[arguments.index('-level:v') + 1], '5.0')
-            self.assertEqual(arguments[arguments.index('-b:v') + 1], '8000k')
+                for resolution, width, level, bitrate in ((1440, 2560, '5.0', '8000k'), (2160, 3840, '5.1', '16000k')):
+                    with self.subTest(resolution=resolution):
+                        await prepare_cast_media(str(path), resolution, Mock())
+                        arguments = spawn.call_args.args
+                        self.assertIn(str(width), arguments[arguments.index('-vf') + 1])
+                        self.assertIn(str(resolution), arguments[arguments.index('-vf') + 1])
+                        self.assertIn('force_original_aspect_ratio=decrease', arguments[arguments.index('-vf') + 1])
+                        self.assertEqual(arguments[arguments.index('-level:v') + 1], level)
+                        self.assertEqual(arguments[arguments.index('-b:v') + 1], bitrate)
 
     async def test_failed_conversion_does_not_publish_partial_cache(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'LOCALAPPDATA': directory}):
@@ -295,6 +384,97 @@ class MediaServerTests(unittest.IsolatedAsyncioTestCase):
         await self.client.close()
         await self.server.close()
         self.directory.cleanup()
+
+    def _hls_process(self, publish=True):
+        finished = asyncio.Event()
+        started = asyncio.Event()
+        process = Mock(returncode=None)
+
+        async def communicate():
+            await finished.wait()
+            return None, b''
+
+        async def wait():
+            await finished.wait()
+            return process.returncode
+
+        def kill():
+            process.returncode = -9
+            finished.set()
+
+        async def spawn(*arguments, **kwargs):
+            directory = Path(arguments[-1]).parent
+            if publish:
+                (directory / 'video.m3u8').write_bytes(b'#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nsegment000000.ts\n#EXTINF:2,\nsegment000001.ts\n')
+                (directory / 'segment000000.ts').write_bytes(b'video segment')
+                (directory / 'segment000001.ts').write_bytes(b'next segment')
+                (directory / 'private.txt').write_bytes(b'not exposed')
+            started.set()
+            return process
+
+        process.communicate = AsyncMock(side_effect=communicate)
+        process.wait = AsyncMock(side_effect=wait)
+        process.kill = Mock(side_effect=kill)
+        return process, AsyncMock(side_effect=spawn), started
+
+    async def test_hls_segments_are_restricted_and_metered_and_cleanup_kills_encoder(self):
+        process, spawn, _ = self._hls_process()
+        with patch('casting.ffmpeg_executable', return_value='ffmpeg'), patch('casting.asyncio.create_subprocess_exec', new=spawn):
+            self.url = await self.server.start(str(self.path), '127.0.0.1', 2160, position=12, encoder='nvenc', speed=2, hls=True)
+            directory = Path(self.server._hls_directory.name)
+            async with self.client.get(self.url) as response:
+                self.assertEqual(response.status, 200)
+                self.assertIn('mpegurl', response.headers['Content-Type'])
+                self.assertIn(b'segment000000.ts', await response.read())
+            self.assertFalse(self.server.stream_started)
+            segment_url = self.url.rsplit('/', 1)[0] + '/segment000000.ts'
+            async with self.client.head(segment_url) as response:
+                self.assertEqual(response.status, 200)
+            self.assertEqual(self.server.bytes_sent, 0)
+            async with self.client.get(segment_url) as response:
+                self.assertEqual(await response.read(), b'video segment')
+            self.assertEqual(self.server.bytes_sent, 13)
+            self.assertTrue(self.server.stream_started)
+            for name in ('private.txt', 'video.m3u8.tmp', 'segment000002.ts'):
+                async with self.client.get(self.url.rsplit('/', 1)[0] + '/' + name) as response:
+                    self.assertEqual(response.status, 404)
+            await self.server.close()
+        self.assertFalse(directory.exists())
+        self.assertFalse(self.server._processes)
+        process.kill.assert_called_once()
+        arguments = spawn.await_args.args
+        self.assertEqual(arguments[arguments.index('-f') + 1], 'hls')
+        self.assertEqual(arguments[arguments.index('-hls_list_size') + 1], '6')
+        self.assertEqual(arguments[arguments.index('-readrate') + 1], '2')
+        self.assertEqual(arguments[arguments.index('-level:v') + 1], '5.1')
+        self.assertEqual(arguments[arguments.index('-b:v') + 1], '16000k')
+        self.assertIn('3840', arguments[arguments.index('-vf') + 1])
+        self.assertIn('2160', arguments[arguments.index('-vf') + 1])
+        self.assertIn('setpts=(PTS-STARTPTS)/2', arguments[arguments.index('-vf') + 1])
+        self.assertEqual(arguments[arguments.index('-ss') + 1], '12')
+
+    async def test_hls_cancel_before_first_segments_cleans_process_and_directory(self):
+        process, spawn, started = self._hls_process(publish=False)
+        with patch('casting.ffmpeg_executable', return_value='ffmpeg'), patch('casting.asyncio.create_subprocess_exec', new=spawn):
+            task = asyncio.create_task(self.server.start(str(self.path), '127.0.0.1', 720, hls=True))
+            await started.wait()
+            directory = Path(self.server._hls_directory.name)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        process.kill.assert_called_once()
+        self.assertFalse(directory.exists())
+        self.assertIsNone(self.server._runner)
+        self.assertIsNone(self.server._hls_task)
+
+    async def test_hls_encoder_failure_closes_service_and_reports_error(self):
+        process = Mock(returncode=1, communicate=AsyncMock(return_value=(None, b'GPU failed')))
+        with patch('casting.ffmpeg_executable', return_value='ffmpeg'), patch('casting.asyncio.create_subprocess_exec', new=AsyncMock(return_value=process)):
+            with self.assertRaisesRegex(RuntimeError, 'GPU failed'):
+                await self.server.start(str(self.path), '127.0.0.1', 720, hls=True)
+        self.assertIsNone(self.server._runner)
+        self.assertIsNone(self.server._hls_directory)
+        self.assertFalse(self.server._processes)
 
     async def test_get_and_head(self):
         async with self.client.get(self.url) as response:
@@ -414,6 +594,8 @@ class MediaServerTests(unittest.IsolatedAsyncioTestCase):
 class CastManagerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.manager = CastManager()
+        self.airplay_scan_patch = patch('casting.discover_airplay', new=AsyncMock(return_value=[]))
+        self.airplay_scan_patch.start()
         self.profile = Mock()
         self.manager._start_monitor = AsyncMock()
         for name in ('construct_play_media_metadata', 'async_set_transport_uri',
@@ -431,6 +613,7 @@ class CastManagerTests(unittest.IsolatedAsyncioTestCase):
         self.manager._server = Mock(start=AsyncMock(return_value='http://192.168.1.3/video.mp4'), close=AsyncMock(), error=None, stream_started=True, transfer_mbps=0, bytes_sent=0)
 
     async def asyncTearDown(self):
+        self.airplay_scan_patch.stop()
         self.manager._renderer = None
         self.manager.close()
         self.assertFalse(self.manager._thread.is_alive())
@@ -554,6 +737,101 @@ class CastManagerTests(unittest.IsolatedAsyncioTestCase):
         event_profile.async_unsubscribe_services.assert_awaited_once()
         self.manager._server.close.assert_awaited_once()
 
+    async def test_manual_airplay_add_uses_server_info_and_protocol_tag(self):
+        found = []
+        self.manager.devicesFound.connect(found.append)
+        with patch('casting.inspect_airplay', new_callable=AsyncMock, return_value={'features': 1}), patch('casting.UpnpFactory') as factory:
+            self.manager._profiles.clear()
+            await self.manager._discover([], 'airplay://192.168.9.33:7002')
+        factory.assert_called_once()
+        factory.return_value.async_create_device.assert_not_called()
+        self.assertEqual(found[-1][0].protocol, 'airplay')
+        self.assertEqual(found[-1][0].host, '192.168.9.33')
+        self.assertIsInstance(self.manager._profiles[found[-1][0].location], AirPlayReceiver)
+
+    async def test_airplay_discovery_survives_ssdp_failure(self):
+        self.manager._profiles.clear()
+        found = []
+        self.manager.devicesFound.connect(found.append)
+        with patch('casting.search_devices', new_callable=AsyncMock, side_effect=OSError('SSDP unavailable')), patch('casting.discover_airplay', new_callable=AsyncMock, return_value=[('Vidda', 'http://192.168.9.33:7002/server-info')]), patch('casting.inspect_airplay', new_callable=AsyncMock, return_value={'features': 1}):
+            await self.manager._discover(['192.168.9.35'])
+        self.assertEqual(found[-1][0].protocol, 'airplay')
+        self.assertEqual(found[-1][0].name, 'Vidda')
+
+    async def test_airplay_live_uses_hls_without_complete_cache(self):
+        receiver = AirPlayReceiver('192.168.1.2', 7002)
+        receiver.transport_state = self.profile.transport_state
+        receiver.async_update = AsyncMock()
+        self.manager._profiles[self.device.location] = receiver
+        self.manager._server.bytes_sent = 1024
+        with patch('casting.route_address', return_value='192.168.1.3'), patch('casting.prepare_cast_media', new_callable=AsyncMock) as prepare, patch.object(self.manager, '_play_transport', new_callable=AsyncMock):
+            await self.manager._start(self.device, 'original.mp4', 12, 1440, delivery='stream', duration=100, speed=2)
+        prepare.assert_not_awaited()
+        self.manager._server.start.assert_awaited_once_with('original.mp4', '192.168.1.3', resolution=1440, position=12, encoder='cpu', speed=2, hls=True)
+        self.assertTrue(self.manager.snapshot()['can_speed'])
+        self.assertEqual(self.manager.snapshot()['position'], 12)
+
+    async def test_airplay_seek_and_speed_rebuild_hls(self):
+        receiver = AirPlayReceiver('192.168.1.2', 7002)
+        receiver.transport_state = self.profile.transport_state
+        receiver.media_position = 5
+        receiver.async_update = AsyncMock()
+        receiver.async_stop = AsyncMock()
+        self.manager.device = self.device
+        self.manager.file_path = 'original.mp4'
+        self.manager._renderer = receiver
+        self.manager._live_resolution = 1440
+        self.manager._media_duration = 100
+        self.manager._server.bytes_sent = 1024
+        with patch('casting.route_address', return_value='192.168.1.3'), patch.object(self.manager, '_play_transport', new_callable=AsyncMock):
+            await self.manager._seek(40)
+            self.assertTrue(self.manager._server.start.await_args.kwargs['hls'])
+            self.assertEqual(self.manager._server.start.await_args.kwargs['position'], 40)
+            await self.manager._command('speed', 2)
+        self.assertTrue(self.manager._server.start.await_args.kwargs['hls'])
+        self.assertEqual(self.manager._server.start.await_args.kwargs['speed'], 2)
+        self.assertEqual(self.manager._server.start.await_args.kwargs['position'], 45)
+
+    async def test_live_rebuild_ignores_intermediate_stopped_notification(self):
+        receiver = AirPlayReceiver('192.168.1.2', 7002)
+        receiver.transport_state = TransportState.PLAYING
+        self.manager.device = self.device
+        self.manager.file_path = 'original.mp4'
+        self.manager._renderer = receiver
+        self.manager._live_resolution = 1440
+
+        async def stop():
+            receiver.transport_state = TransportState.STOPPED
+
+        async def rebuild(*args, **kwargs):
+            await self.manager._publish_state()
+            self.assertIs(self.manager._renderer, receiver)
+            self.assertTrue(self.manager._rebuilding)
+            return 'http://192.168.1.3/live/video.m3u8'
+
+        receiver.async_stop = AsyncMock(side_effect=stop)
+        self.manager._server.start.side_effect = rebuild
+        with patch('casting.route_address', return_value='192.168.1.3'), patch.object(self.manager, '_play_transport', new_callable=AsyncMock):
+            await self.manager._seek(40)
+        self.assertFalse(self.manager._rebuilding)
+        self.manager._server.close.assert_not_awaited()
+
+    async def test_airplay_live_resume_rebuilds_from_paused_original_position(self):
+        receiver = AirPlayReceiver('192.168.1.2', 7002)
+        receiver.transport_state = TransportState.PAUSED_PLAYBACK
+        receiver.media_position = 5
+        receiver.async_play = AsyncMock()
+        self.manager.device = self.device
+        self.manager.file_path = 'original.mp4'
+        self.manager._renderer = receiver
+        self.manager._live_resolution = 1440
+        self.manager._playback_speed = 2
+        self.manager._stream_offset = 30
+        with patch.object(self.manager, '_seek', new_callable=AsyncMock) as seek, patch.object(self.manager, '_update', new_callable=AsyncMock):
+            await self.manager._command('play', None)
+        seek.assert_awaited_once_with(40)
+        receiver.async_play.assert_not_awaited()
+
     async def test_notification_wakes_monitor_without_querying_device(self):
         self.manager._event_profile = self.profile
         self.manager._state_wakeup = asyncio.Event()
@@ -669,7 +947,7 @@ class CastManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.manager.busy)
 
     async def test_debug_switch_changes_library_verbosity_and_locates_log(self):
-        loggers = [logging.getLogger(name) for name in ('casting', 'async_upnp_client', 'aiohttp')]
+        loggers = [logging.getLogger(name) for name in ('casting', 'async_upnp_client', 'aiohttp', 'pyatv', 'zeroconf')]
         previous_levels = [item.level for item in loggers]
         with tempfile.TemporaryDirectory() as directory:
             handler = logging.FileHandler(Path(directory) / 'crash.log', encoding='utf-8')
@@ -679,7 +957,9 @@ class CastManagerTests(unittest.IsolatedAsyncioTestCase):
                     self.manager.set_debug(True)
                     self.assertTrue(all(item.level == logging.DEBUG for item in loggers))
                     self.manager.set_debug(False)
-                    self.assertTrue(all(item.level == logging.INFO for item in loggers))
+                    self.assertTrue(all(item.level == logging.WARNING for item in loggers))
+                    self.assertTrue(all(not item.isEnabledFor(logging.INFO) for item in loggers))
+                    self.assertTrue(all(item.isEnabledFor(logging.ERROR) for item in loggers))
             finally:
                 handler.close()
                 for item, level in zip(loggers, previous_levels):
@@ -859,6 +1139,96 @@ class CastManagerTests(unittest.IsolatedAsyncioTestCase):
         with patch('casting.search_devices', side_effect=search), patch('casting.UpnpFactory', return_value=factory):
             await self.manager._discover(['192.168.1.3'])
         self.assertEqual(found, [[]])
+
+
+class AirPlayIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.video = Path(self.directory.name) / 'sample.mp4'
+        self.video.write_bytes(b'video bytes')
+        self.state = dict(readyToPlay=False, position=0, duration=100, rate=1)
+        self.fetch_video = True
+        self.calls = []
+        app = web.Application()
+        app.router.add_post('/play', self._play)
+        app.router.add_get('/playback-info', self._info)
+        app.router.add_post('/rate', self._control)
+        app.router.add_post('/scrub', self._control)
+        app.router.add_post('/stop', self._control)
+        self.runner = web.AppRunner(app)
+        await self.runner.setup()
+        await web.TCPSite(self.runner, '127.0.0.1', 0).start()
+        self.port = self.runner.addresses[0][1]
+        self.location = f'http://127.0.0.1:{self.port}/server-info'
+        self.receiver = AirPlayReceiver('127.0.0.1', self.port, 'Simulated AirPlay TV')
+        self.manager = CastManager()
+        self.manager._profiles[self.location] = self.receiver
+        self.device = CastDevice('Simulated AirPlay TV', self.location, '127.0.0.1', 'airplay:test', 'airplay')
+
+    async def asyncTearDown(self):
+        await self.manager._disconnect()
+        self.manager.close()
+        await self.runner.cleanup()
+        self.directory.cleanup()
+
+    async def _play(self, request):
+        info = plistlib.loads(await request.read())
+        self.calls.append('play')
+        self.state.update(readyToPlay=True, position=0, rate=1)
+        if self.fetch_video:
+            async with ClientSession() as client:
+                async with client.get(info['Content-Location']) as response:
+                    self.assertEqual(await response.read(), b'video bytes')
+        return web.Response()
+
+    async def _info(self, request):
+        self.calls.append('info')
+        return web.Response(body=plistlib.dumps(self.state), content_type='text/x-apple-plist+xml')
+
+    async def _control(self, request):
+        self.calls.append(request.path)
+        if request.path == '/rate':
+            self.state['rate'] = float(request.query['value'])
+        elif request.path == '/scrub':
+            self.state['position'] = float(request.query['position'])
+        else:
+            self.state.update(readyToPlay=False, duration=0)
+        return web.Response()
+
+    async def test_complete_airplay_session_uses_video_transfer_and_manual_controls(self):
+        started = []
+        self.manager.started.connect(started.append)
+        await self.manager._start(self.device, str(self.video), 12, duration=100)
+        self.assertEqual(len(started), 1)
+        self.assertEqual(self.manager.snapshot()['position'], 12)
+        self.assertEqual(self.manager.snapshot()['status_sync'], 'manual')
+        self.assertFalse(self.manager.snapshot()['can_volume'])
+        self.assertIsNone(self.manager._notify_server)
+        await self.manager._command('pause', None)
+        self.assertEqual(self.manager.snapshot()['state'], 'PAUSED_PLAYBACK')
+        await self.manager._command('play', None)
+        self.assertEqual(self.calls.count('play'), 1)
+        await self.manager._command('seek', 60)
+        self.assertEqual(self.manager.snapshot()['position'], 60)
+        await self.manager._command('stop', None)
+        self.assertFalse(self.manager.connected)
+        self.assertIsNone(self.receiver._connection)
+        self.assertIsNone(self.manager._monitor_task)
+        self.assertIsNone(self.manager._server.url)
+
+    async def test_success_response_without_video_read_does_not_confirm_start(self):
+        self.fetch_video = False
+        started = []
+        self.manager.started.connect(started.append)
+        await self.manager._start(self.device, str(self.video), 0)
+        self.assertFalse(started)
+        self.assertFalse(self.manager._playback_started)
+        self.assertEqual(self.manager._server.bytes_sent, 0)
+        self.manager._start_deadline = time.monotonic() - 1
+        with self.assertRaises(RuntimeError):
+            await self.manager._update()
+        self.assertFalse(self.manager.connected)
+        self.assertIsNone(self.receiver._connection)
 
 
 class RendererResponseTests(unittest.TestCase):

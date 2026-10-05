@@ -830,7 +830,7 @@ class MainWindow(QMainWindow):
         self.subtitle_btn.clicked.connect(self._show_subtitle_menu)
         btn_row.addWidget(self.subtitle_btn)
 
-        self.cast_btn = self._mk_icon_btn("fa5s.tv", "投屏（DLNA）")
+        self.cast_btn = self._mk_icon_btn("fa5s.tv", "投屏（DLNA / AirPlay）")
         self.cast_btn.clicked.connect(self._show_cast_dialog)
         btn_row.addWidget(self.cast_btn)
 
@@ -1542,7 +1542,7 @@ class MainWindow(QMainWindow):
 
     def _on_cast_stopped(self, previous):
         self.cast_btn.setIcon(qta.icon('fa5s.tv', color='#ffffff'))
-        self.cast_btn.setToolTip("投屏（DLNA）")
+        self.cast_btn.setToolTip("投屏（DLNA / AirPlay）")
         if self.player and self._current_file == previous.get('file'):
             self.player.seek_to(previous.get('position', 0))
             if previous.get('state') == 'PLAYING':

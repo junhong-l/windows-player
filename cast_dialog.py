@@ -18,7 +18,8 @@ class CastDialog(QDialog):
         self._state = {}
         self._last_error = ''
         self._manual_location = ''
-        self.setWindowTitle("DLNA 投屏")
+        self._selected_device_protocol = None
+        self.setWindowTitle("投屏（DLNA / AirPlay）")
         self.setMinimumSize(460, 550)
         self.resize(520, 600)
         self.setStyleSheet("""
@@ -27,6 +28,8 @@ class CastDialog(QDialog):
             QCheckBox { color: #e0e0e0; font-size: 13px; }
             QComboBox { color: #e0e0e0; background: #222; border: 1px solid #444; padding: 5px 8px; }
             QComboBox QAbstractItemView { color: #e0e0e0; background: #222; selection-background-color: #006b8f; }
+            QComboBox QLineEdit { color: #e0e0e0; background: transparent; border: none; }
+            QComboBox QLineEdit:disabled { color: #888; }
             QListWidget { background: #222; border: 1px solid #444; }
             QListWidget::item { padding: 10px; }
             QListWidget::item:selected { background: #006b8f; }
@@ -58,18 +61,18 @@ class CastDialog(QDialog):
         self.copy_error_btn.setEnabled(False)
         self.copy_error_btn.clicked.connect(self._copy_error)
         search_row.addWidget(self.copy_error_btn)
-        self.add_device_btn = self._icon_button('fa5s.plus', "按设备描述地址添加")
+        self.add_device_btn = self._icon_button('fa5s.plus', "按 DLNA 描述地址或 AirPlay 地址添加")
         self.add_device_btn.clicked.connect(self._add_device)
         search_row.addWidget(self.add_device_btn)
         self.refresh_btn = self._icon_button('fa5s.sync-alt', "搜索设备")
-        self.refresh_btn.setToolTip("搜索同一局域网中的 DLNA 播放设备")
+        self.refresh_btn.setToolTip("搜索同一局域网中的 DLNA 和旧版 AirPlay 视频接收设备")
         self.refresh_btn.clicked.connect(self._search)
         search_row.addWidget(self.refresh_btn)
         layout.addLayout(search_row)
         self.device_list = QListWidget()
         self.device_list.setMinimumHeight(120)
         self.device_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.device_list.itemSelectionChanged.connect(self._refresh_controls)
+        self.device_list.itemSelectionChanged.connect(self._on_device_selection)
         self.device_list.itemDoubleClicked.connect(lambda item: self._start())
         layout.addWidget(self.device_list, 1)
 
@@ -79,8 +82,9 @@ class CastDialog(QDialog):
         self.quality_combo.addItem("720p（兼容）", 720)
         self.quality_combo.addItem("1080p（兼容）", 1080)
         self.quality_combo.addItem("2K（1440p）", 1440)
+        self.quality_combo.addItem("4K（2160p）", 2160)
         self.quality_combo.addItem("原画（直传）", None)
-        self.quality_combo.setToolTip("兼容模式转为 H.264 8-bit、30fps、AAC 双声道；2K 上限为 2560×1440，需接收设备支持")
+        self.quality_combo.setToolTip("兼容模式转为 H.264 8-bit、30fps、AAC 双声道；4K 上限为 3840×2160，需接收设备支持 H.264 Level 5.1")
         quality_row.addWidget(self.quality_combo, 1)
         self.delivery_combo = QComboBox()
         self.delivery_combo.addItem("实时（边转边播）", 'stream')
@@ -221,7 +225,7 @@ class CastDialog(QDialog):
 
     def _add_device(self):
         location, accepted = QInputDialog.getText(
-            self, "添加 DLNA 设备", "设备描述地址", text=self._manual_location
+            self, "添加投屏设备", "DLNA 描述地址 / AirPlay 地址（airplay://IP:端口）", text=self._manual_location
         )
         if accepted and location.strip() and self.manager.add_device(location):
             self._manual_location = location.strip()
@@ -232,7 +236,8 @@ class CastDialog(QDialog):
         selected = current.data(Qt.ItemDataRole.UserRole).udn if current else None
         self.device_list.clear()
         for device in devices:
-            item = QListWidgetItem(qta.icon('fa5s.tv', color='#ffffff'), f"{device.name}\n{device.host}")
+            protocol = 'AirPlay' if device.protocol == 'airplay' else 'DLNA'
+            item = QListWidgetItem(qta.icon('fa5s.tv', color='#ffffff'), f"{device.name}\n{device.host}  |  {protocol}")
             item.setToolTip(device.name + "\n" + device.host)
             item.setData(Qt.ItemDataRole.UserRole, device)
             self.device_list.addItem(item)
@@ -241,7 +246,17 @@ class CastDialog(QDialog):
         if not self.device_list.selectedItems() and devices:
             self.device_list.setCurrentRow(0)
         self.status_label.setText(f"发现 {len(devices)} 台设备" if devices else "未发现设备")
-        self.status_label.setToolTip("请确认设备已开启 DLNA，并与电脑处于同一局域网；防火墙需允许局域网访问")
+        self.status_label.setToolTip("请打开电视的投屏接收页面，并与电脑处于同一局域网；防火墙需允许局域网访问")
+        self._refresh_controls()
+
+    def _on_device_selection(self):
+        item = self.device_list.currentItem()
+        if item is not None:
+            protocol = item.data(Qt.ItemDataRole.UserRole).protocol
+            if protocol != self._selected_device_protocol:
+                self._selected_device_protocol = protocol
+                self.quality_combo.setCurrentIndex(self.quality_combo.findData(None if protocol == 'airplay' else 720))
+                self.delivery_combo.setCurrentIndex(self.delivery_combo.findData('stream'))
         self._refresh_controls()
 
     def _on_encoders(self, available):
@@ -346,6 +361,10 @@ class CastDialog(QDialog):
     def _refresh_controls(self, *args):
         available = not self.manager.busy
         connected = self.manager.connected
+        item = self.device_list.currentItem()
+        airplay = item is not None and item.data(Qt.ItemDataRole.UserRole).protocol == 'airplay'
+        self.delivery_combo.setToolTip("AirPlay 实时模式使用 HLS 分段转码；不支持时可手动选择完整 MP4 缓存" if airplay
+                                       else "实时模式发送 MPEG-TS 流；不支持时可手动改用完整 MP4 缓存")
         self.refresh_btn.setEnabled(available)
         self.add_device_btn.setEnabled(available and not connected)
         self.device_list.setEnabled(available and not connected)
@@ -354,11 +373,22 @@ class CastDialog(QDialog):
         self.delivery_combo.setEnabled(available and not connected and self.quality_combo.currentData() is not None)
         self.encoder_combo.setEnabled(available and not connected and self.quality_combo.currentData() is not None)
         compatible = self.quality_combo.currentData() is not None
+        self.delivery_combo.setItemText(self.delivery_combo.findData('stream'), "实时（边转边播）" if compatible else "原文件直传")
+        self.delivery_combo.setItemText(self.delivery_combo.findData('file'), "完整缓存（备用）" if compatible else "原文件直传")
         if not compatible:
             self._set_speed(1)
         self.speed_combo.setEnabled(available and compatible and (not connected or self._state.get('can_speed', False)))
-        self.speed_combo.setToolTip("实时投屏切换倍速会从当前进度重建视频流；音频保持音调" if self.delivery_combo.currentData() == 'stream'
-                                   else "完整缓存可在投屏前选择倍速；播放中需停止后重新选择")
+        for combo in (self.delivery_combo, self.encoder_combo, self.speed_combo):
+            combo.setEditable(not compatible)
+            if not compatible:
+                combo.lineEdit().setReadOnly(True)
+                combo.lineEdit().setText("此模式不可修改")
+        self.encoder_status.setVisible(compatible)
+        if not compatible:
+            self.speed_combo.setToolTip("当前原画投屏不支持倍速控制；选择兼容画质后可通过转码设置倍速")
+        else:
+            self.speed_combo.setToolTip("实时投屏切换倍速会从当前进度重建视频流；音频保持音调" if self.delivery_combo.currentData() == 'stream'
+                                       else "完整缓存可在投屏前选择倍速；播放中需停止后重新选择")
         self.stop_btn.setEnabled((available and connected) or (self.manager.busy and not connected))
         self.sync_btn.setEnabled(available and connected)
         self.stop_btn.setToolTip("取消投屏准备" if self.manager.busy and not connected else "停止投屏")

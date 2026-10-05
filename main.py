@@ -5,6 +5,7 @@
 import sys
 import os
 import logging
+from logging.handlers import RotatingFileHandler
 import traceback
 
 
@@ -45,10 +46,10 @@ def _setup_logging() -> str:
         log_path = os.path.join(fallback_dir, 'crash.log')
 
     logging.basicConfig(
-        filename=log_path,
-        level=logging.DEBUG if '--debug' in sys.argv or os.environ.get('VIDEO_PLAYER_DEBUG') == '1' else logging.INFO,
+        handlers=[RotatingFileHandler(log_path, maxBytes=1024 * 1024, backupCount=2,
+                                      encoding='utf-8', delay=True)],
+        level=logging.DEBUG if '--debug' in sys.argv or os.environ.get('VIDEO_PLAYER_DEBUG') == '1' else logging.WARNING,
         format='%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
-        encoding='utf-8',
     )
     return log_path
 
@@ -59,6 +60,8 @@ _log_path = _setup_logging()
 import faulthandler as _faulthandler
 _fault_log_path = os.path.join(_get_app_exe_dir(), 'fault.log')
 try:
+    if os.path.isfile(_fault_log_path) and os.path.getsize(_fault_log_path) >= 1024 * 1024:
+        os.replace(_fault_log_path, _fault_log_path + '.1')
     _fault_log_file = open(_fault_log_path, 'a', encoding='utf-8')
     _faulthandler.enable(_fault_log_file)
 except Exception:

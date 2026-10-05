@@ -33,6 +33,7 @@ mpv-latest.7z
 
 # 临时文件
 *.log
+*.log.[0-9]*
 *.tmp
 .DS_Store
 Thumbs.db

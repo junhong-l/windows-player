@@ -3,7 +3,7 @@
 ; 编译前请先运行 python build.py 生成 dist\视频播放器\ 目录
 
 #define MyAppName "视频播放器"
-#define MyAppVersion "1.4.6"
+#define MyAppVersion "1.4.7"
 #define MyAppPublisher "Player"
 #define MyAppExeName "视频播放器.exe"
 #define MyAppID "A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
