@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QDialog, QFormLayout, QMenu, QListWidget, QSplitter, QListWidgetItem
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QRect
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QAction, QKeySequence, QIcon
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QAction, QKeySequence, QIcon, QCursor
 import qtawesome as qta
 
 from player_core import PlayerCore
@@ -62,7 +62,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("全局设置")
-        self.setFixedSize(360, 320)
+        self.setFixedSize(360, 390)
         
         # 设置窗口图标
         icon_path = os.path.join(os.path.dirname(__file__), 'icon.ico')
@@ -173,6 +173,17 @@ class SettingsDialog(QDialog):
         icon_row.addWidget(self.fix_icon_btn, 1)
         layout.addLayout(icon_row)
 
+        default_row = QHBoxLayout()
+        default_label = QLabel("默认播放器")
+        default_label.setFixedWidth(80)
+        self.default_player_btn = QPushButton("设为默认播放器")
+        self.default_player_btn.setIcon(qta.icon('fa5s.desktop', color='#ffffff'))
+        self.default_player_btn.setToolTip("一键设置全部支持的视频格式")
+        self.default_player_btn.clicked.connect(self._set_default_player)
+        default_row.addWidget(default_label)
+        default_row.addWidget(self.default_player_btn, 1)
+        layout.addLayout(default_row)
+
         layout.addStretch()
 
         btn_row = QHBoxLayout()
@@ -182,6 +193,26 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(ok_btn)
         layout.addLayout(btn_row)
     
+    def _set_default_player(self):
+        if sys.platform != 'win32':
+            QMessageBox.information(self, "提示", "此功能仅支持 Windows 系统")
+            return
+        self.default_player_btn.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            from default_player import default_player_manager
+            success = default_player_manager.set_as_default()
+        except Exception as error:
+            QMessageBox.critical(self, "设置失败", str(error))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.default_player_btn.setEnabled(True)
+        if success:
+            QMessageBox.information(self, "设置完成", "所有支持的视频格式已设为使用本播放器打开。")
+        else:
+            QMessageBox.warning(self, "设置失败", default_player_manager.last_error or "文件关联未生效，请稍后重试。")
+
     def _fix_file_icons(self):
         """修复文件关联图标"""
         if sys.platform != 'win32':
@@ -506,6 +537,8 @@ class MainWindow(QMainWindow):
         self.player: PlayerCore | None = None
         self._current_file = None
         self._current_folder = None
+        self._cast_manager = None
+        self._cast_dialog = None
         self._folder_files = []
         self._current_index = -1
         self._is_seeking = False
@@ -679,6 +712,10 @@ class MainWindow(QMainWindow):
         hint_label.setStyleSheet("font-size: 13px; color: #666;")
         hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         welcome_layout.addWidget(hint_label)
+
+        self.welcome_settings_btn = self._mk_icon_btn("fa5s.cog", "设置")
+        self.welcome_settings_btn.clicked.connect(self._show_settings)
+        welcome_layout.addWidget(self.welcome_settings_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         
         self.stacked_widget.addWidget(self.welcome_page)
         
@@ -699,6 +736,14 @@ class MainWindow(QMainWindow):
         self.playlist_widget.setParent(central)
         self.playlist_widget.hide()
         
+        self.fullscreen_title = QLabel(central)
+        self.fullscreen_title.setTextFormat(Qt.TextFormat.PlainText)
+        self.fullscreen_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.fullscreen_title.setContentsMargins(20, 0, 20, 0)
+        self.fullscreen_title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.fullscreen_title.setStyleSheet("background: rgba(0,0,0,0.8); color: #fff; font-size: 16px;")
+        self.fullscreen_title.hide()
+
         # 底部控制栏（悬浮覆盖层）
         self.control_widget = QWidget(central)
         self.control_widget.setObjectName("controlBar")
@@ -784,6 +829,10 @@ class MainWindow(QMainWindow):
         self.subtitle_btn = self._mk_icon_btn("fa5s.closed-captioning", "选择字幕")
         self.subtitle_btn.clicked.connect(self._show_subtitle_menu)
         btn_row.addWidget(self.subtitle_btn)
+
+        self.cast_btn = self._mk_icon_btn("fa5s.tv", "投屏（DLNA）")
+        self.cast_btn.clicked.connect(self._show_cast_dialog)
+        btn_row.addWidget(self.cast_btn)
 
         self.settings_btn = self._mk_icon_btn("fa5s.cog", "设置")
         self.settings_btn.clicked.connect(self._show_settings)
@@ -957,6 +1006,7 @@ class MainWindow(QMainWindow):
                 
         # 更新按钮图标为暂停（表示正在播放）
         self.play_btn.setIcon(qta.icon('fa5s.pause', color='#ffffff'))
+        self._update_fullscreen_title()
     
     def _on_video_ended(self):
         """视频播放结束（包括片尾跳过触发）- 在主线程中执行"""
@@ -1077,6 +1127,7 @@ class MainWindow(QMainWindow):
             self.playlist_widget.update_current(self._current_index, self._folder_files)
         
         self.player.load(file_path)
+        self.fullscreen_title.hide()
         # 按钮图标会在 _on_file_loaded 中根据实际播放状态更新
         self._show_controls()
         self._maybe_start_hide_timer()
@@ -1093,6 +1144,7 @@ class MainWindow(QMainWindow):
             self._show_controls(persist=True)
         else:
             self._maybe_start_hide_timer()
+        self._update_fullscreen_title()
 
     def _stop(self):
         if self.player:
@@ -1102,6 +1154,7 @@ class MainWindow(QMainWindow):
             self.play_btn.setIcon(qta.icon('fa5s.play', color='#ffffff'))
             self.progress_slider.setValue(0)
             self.time_label.setText("00:00 / 00:00")
+            self.fullscreen_title.hide()
     
     def _save_current_progress(self):
         """保存当前文件的播放进度"""
@@ -1124,6 +1177,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("视频播放器")
         self.stacked_widget.setCurrentIndex(0)
         self.control_widget.hide()
+        self.fullscreen_title.hide()
 
     def _seek_forward(self):
         if self.player:
@@ -1141,6 +1195,7 @@ class MainWindow(QMainWindow):
             self.player.seek_to(start_pos)
             self.player.play()
             self.play_btn.setIcon(qta.icon('fa5s.pause', color='#ffffff'))
+            self._update_fullscreen_title()
             self._show_toast("重新播放")
 
     # ========== 进度 ========== #
@@ -1162,6 +1217,7 @@ class MainWindow(QMainWindow):
             self.time_label.setText(f"{self._format_time(pos)} / {self._format_time(self.player.duration)}")
 
     def _update_progress(self):
+        self._update_fullscreen_title()
         if not self.player or self._is_seeking:
             return
         duration = self.player.duration
@@ -1452,6 +1508,47 @@ class MainWindow(QMainWindow):
                 self.player.speed = speed
                 self.player.seek_step = seek_step
                 self.speed_btn.setToolTip(f"播放速度（当前 {speed}x）" if speed != 1.0 else "播放速度")
+
+    def _show_cast_dialog(self):
+        if not self._current_file:
+            self._show_toast("请先打开视频")
+            return
+        try:
+            if self._cast_manager is None:
+                from casting import CastManager
+                from cast_dialog import CastDialog
+                self._cast_manager = CastManager(self)
+                self._cast_manager.started.connect(self._on_cast_started)
+                self._cast_manager.stopped.connect(self._on_cast_stopped)
+                self._cast_dialog = CastDialog(self._cast_manager, self._cast_media, self)
+            self._cast_dialog.refresh_context()
+            self._cast_dialog.show()
+            self._cast_dialog.raise_()
+            self._cast_dialog.activateWindow()
+        except Exception as error:
+            QMessageBox.warning(self, "投屏不可用", str(error))
+
+    def _cast_media(self):
+        return (self._current_file, self.player.position if self.player else 0,
+            self.player.duration if self.player else 0)
+
+    def _on_cast_started(self, session):
+        self.cast_btn.setIcon(qta.icon('fa5s.tv', color='#00a1d6'))
+        self.cast_btn.setToolTip("投屏中：" + session['device'])
+        if self.player and self._current_file == session['file']:
+            self.player.pause()
+            self.play_btn.setIcon(qta.icon('fa5s.play', color='#ffffff'))
+            self._update_fullscreen_title()
+
+    def _on_cast_stopped(self, previous):
+        self.cast_btn.setIcon(qta.icon('fa5s.tv', color='#ffffff'))
+        self.cast_btn.setToolTip("投屏（DLNA）")
+        if self.player and self._current_file == previous.get('file'):
+            self.player.seek_to(previous.get('position', 0))
+            if previous.get('state') == 'PLAYING':
+                self.player.play()
+                self.play_btn.setIcon(qta.icon('fa5s.pause', color='#ffffff'))
+            self._update_fullscreen_title()
     
     def _set_skip_intro(self):
         """设置跳过片头时间 - 默认值为当前播放位置"""
@@ -1556,6 +1653,30 @@ class MainWindow(QMainWindow):
         return spin.value(), accepted
 
     # ========== 全屏 ========== #
+
+    def _update_fullscreen_title(self):
+        if not hasattr(self, 'fullscreen_title'):
+            return
+        central = self.centralWidget()
+        in_title_corner = self.isActiveWindow() and QRect(0, 0, min(320, central.width()), 50).contains(
+            central.mapFromGlobal(QCursor.pos())
+        )
+        visible = bool(
+            self._is_fullscreen and self._current_file and self.player
+            and (self.player.is_paused or in_title_corner) and self.player.duration > 0
+            and self.stacked_widget.currentIndex() == 1
+        )
+        if not visible:
+            self.fullscreen_title.hide()
+            return
+        self.fullscreen_title.setGeometry(0, 0, self.centralWidget().width(), 50)
+        filename = os.path.basename(self._current_file)
+        self.fullscreen_title.setText(self.fullscreen_title.fontMetrics().elidedText(
+            filename, Qt.TextElideMode.ElideMiddle,
+            max(0, self.fullscreen_title.contentsRect().width())
+        ))
+        self.fullscreen_title.show()
+        self.fullscreen_title.raise_()
 
     def _toggle_fullscreen(self):
         if self._is_fullscreen:
@@ -1739,14 +1860,15 @@ class MainWindow(QMainWindow):
             self.centralWidget().width(), 
             50
         )
+        self._update_fullscreen_title()
 
     def _update_control_bar_responsive(self):
         """窗口宽度不足时，按优先级隐藏部分按钮以节省空间"""
         width = self.centralWidget().width()
 
         # 宽度不足时，依次隐藏：音轨/字幕 -> 快进/快退
-        show_audio_subtitle = width >= 1050
-        show_seek = width >= 950
+        show_audio_subtitle = width >= 1090
+        show_seek = width >= 990
 
         for btn in (self.audio_btn, self.subtitle_btn):
             btn.setVisible(show_audio_subtitle)
@@ -1766,6 +1888,8 @@ class MainWindow(QMainWindow):
         self._save_current_progress()
         self._timer.stop()
         self._hide_timer.stop()
+        if self._cast_manager is not None:
+            self._cast_manager.close()
         if self.player:
             try:
                 # 先清除所有回调，防止 mpv 事件线程在 terminate() 后访问已销毁的 handle

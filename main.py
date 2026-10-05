@@ -46,8 +46,8 @@ def _setup_logging() -> str:
 
     logging.basicConfig(
         filename=log_path,
-        level=logging.DEBUG,
-        format='%(asctime)s [%(levelname)s] %(message)s',
+        level=logging.DEBUG if '--debug' in sys.argv or os.environ.get('VIDEO_PLAYER_DEBUG') == '1' else logging.INFO,
+        format='%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
         encoding='utf-8',
     )
     return log_path
@@ -93,7 +93,7 @@ if sys.platform == 'win32':
 
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QCheckBox
+    QLabel, QPushButton, QCheckBox, QMessageBox
 )
 from PyQt6.QtCore import Qt, QTimer, QLibraryInfo, QLocale, QTranslator
 from PyQt6.QtGui import QFont, QIcon, QFontDatabase
@@ -200,7 +200,7 @@ class DefaultPlayerDialog(QDialog):
         layout.addWidget(title)
         
         # 副标题
-        subtitle = QLabel("设置后，双击视频文件将自动使用此播放器打开。")
+        subtitle = QLabel("将一键关联所有支持的视频格式，双击视频文件即可使用此播放器打开。")
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -258,9 +258,15 @@ def check_default_player(window):
     
     # 如果用户选择设为默认
     if dialog.result_accepted:
-        default_player_manager.set_as_default()
-        # 显示提示
-        window._show_toast("已注册文件关联，请在系统设置中确认", 3000)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            success = default_player_manager.set_as_default()
+        finally:
+            QApplication.restoreOverrideCursor()
+        if success:
+            window._show_toast("所有支持的视频格式已设为使用本播放器打开", 3000)
+        else:
+            QMessageBox.warning(window, "设置失败", default_player_manager.last_error or "文件关联未生效，请稍后重试。")
 
 
 def main():
@@ -336,12 +342,12 @@ def _main_inner():
     window = MainWindow()
     window.show()
 
-    if len(sys.argv) > 1:
-        file_path = sys.argv[1]
+    file_args = [argument for argument in sys.argv[1:] if argument != '--debug']
+    if file_args:
+        file_path = file_args[0]
         if os.path.isfile(file_path):
             QTimer.singleShot(200, lambda: window._load_file(file_path))
-    else:
-        QTimer.singleShot(500, lambda: check_default_player(window))
+    QTimer.singleShot(500, lambda: check_default_player(window))
 
     sys.exit(app.exec())
 

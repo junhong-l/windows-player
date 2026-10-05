@@ -37,8 +37,13 @@ def check_files():
         'main_window.py',
         'player_core.py',
         'folder_settings.py',
+        'casting.py',
+        'cast_dialog.py',
         'icon.ico',
         'build.spec',
+        'third_party/SFTA.ps1',
+        'third_party/set-default-player.ps1',
+        'third_party/PS-SFTA-LICENSE.txt',
     ]
 
     # libmpv-2.dll 是关键文件，单独检查

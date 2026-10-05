@@ -6,6 +6,9 @@ block_cipher = None
 # 需要打包的数据文件
 datas = [
     ('icon.ico', '.'),  # 图标文件
+    ('third_party/SFTA.ps1', 'third_party'),
+    ('third_party/set-default-player.ps1', 'third_party'),
+    ('third_party/PS-SFTA-LICENSE.txt', 'third_party'),
 ]
 
 # 打包自定义字体（如果存在）
@@ -35,7 +38,10 @@ hiddenimports = [
     'PyQt6.QtCore',
     'PyQt6.QtGui',
     'PyQt6.QtWidgets',
+    'PyQt6.QtNetwork',
     'PyQt6.sip',
+    'async_upnp_client.profiles.dlna',
+    'aiohttp',
 ]
 
 a = Analysis(
